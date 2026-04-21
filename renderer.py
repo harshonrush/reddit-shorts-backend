@@ -21,8 +21,8 @@ def render_video(audio, video, subtitles, output, max_duration=60):
     else:
         safe_sub_escaped = safe_sub
 
-    # Optimized video filter: lower resolution, reduced quality
-    vf = f"scale=720:1280,ass='{safe_sub_escaped}'"
+    # Ultra-low quality for Railway free tier (512MB RAM)
+    vf = f"scale=480:854,ass='{safe_sub_escaped}'"
 
     cmd = [
         "ffmpeg",
@@ -35,18 +35,20 @@ def render_video(audio, video, subtitles, output, max_duration=60):
         "-map", "0:v:0",
         "-map", "1:a:0",
         
-        # Video: lower quality for faster encoding + less RAM
+        # Video: ULTRA low quality for 512MB RAM
         "-c:v", "libx264",
-        "-preset", "veryfast",  # Fast encoding
-        "-crf", "28",           # Lower quality = smaller file, less RAM
+        "-preset", "ultrafast",  # Fastest encoding
+        "-crf", "35",             # Very low quality = less RAM
+        "-threads", "1",          # Single thread = less RAM
+        "-max_muxing_queue_size", "1024",
         
-        # Audio: reduced bitrate
+        # Audio: minimal bitrate
         "-c:a", "aac",
-        "-b:a", "128k",
+        "-b:a", "96k",
         
         # Subtitles and duration
         "-vf", vf,
-        "-t", str(max_duration),
+        "-t", "30",               # Shorter duration
         "-shortest",
 
         output

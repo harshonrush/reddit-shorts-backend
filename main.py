@@ -157,6 +157,75 @@ async def set_auto_post_settings(enabled: bool, hour: int = 18, minute: int = 0,
     return {"status": "updated", "enabled": enabled, "time": f"{hour}:{minute:02d}", "user_id": user_id}
 
 
+# Trigger endpoint for external cron service
+@app.post("/trigger-daily-post")
+async def trigger_daily_post(user_id: str = "default", secret: str = None):
+    """Trigger daily post manually (for cron-job.org or similar)."""
+    # Optional: add secret check for security
+    expected_secret = os.getenv("CRON_SECRET")
+    if expected_secret and secret != expected_secret:
+        raise HTTPException(status_code=401, detail="Invalid secret")
+    
+    # Check if enabled for this user
+    settings = load_settings(user_id)
+    if not settings.get("enabled", False):
+        return {"status": "skipped", "reason": "Auto-post disabled for this user"}
+    
+    # Run the job
+    from scheduler import daily_job
+    import threading
+    
+    def run_job():
+        daily_job(user_id)
+    
+    thread = threading.Thread(target=run_job)
+    thread.start()
+    
+    return {"status": "triggered", "user_id": user_id}
+
+
+# Cron endpoint for cron-job.org (runs every 5 minutes)
+@app.get("/cron/run")
+def run_cron():
+    """Check all users and run daily job if scheduled time matches."""
+    from datetime import datetime
+    from scheduler import daily_job, SETTINGS_DIR, load_settings
+    import threading
+    
+    now = datetime.utcnow()  # Railway uses UTC
+    print(f"[CRON HIT] {now.isoformat()}")
+    
+    triggered = []
+    
+    # Find all user settings files
+    if os.path.exists(SETTINGS_DIR):
+        for filename in os.listdir(SETTINGS_DIR):
+            if filename.endswith(".json"):
+                user_id = filename.replace(".json", "")
+                settings = load_settings(user_id)
+                
+                if not settings.get("enabled", False):
+                    continue
+                
+                # Get scheduled time (stored as UTC)
+                scheduled_hour = settings.get("hour", 18)
+                scheduled_minute = settings.get("minute", 0)
+                
+                # Check if current UTC time matches scheduled time (within 5-min window)
+                if now.hour == scheduled_hour and abs(now.minute - scheduled_minute) < 5:
+                    print(f"[CRON] Triggering for user {user_id} at {now.hour}:{now.minute:02d}")
+                    
+                    # Run in background thread
+                    def run_job(uid=user_id):
+                        daily_job(uid)
+                    
+                    thread = threading.Thread(target=run_job)
+                    thread.start()
+                    triggered.append(user_id)
+    
+    return {"status": "checked", "triggered": triggered, "time": now.isoformat()}
+
+
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 8000))

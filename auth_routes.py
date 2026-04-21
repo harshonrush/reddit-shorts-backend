@@ -13,7 +13,7 @@ for f in os.listdir("."):
         break
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-REDIRECT_URI = "http://localhost:8000/auth/callback"
+REDIRECT_URI = "https://reddit-shorts-backend-production.up.railway.app/auth/callback"
 
 STATE_FILE = "oauth_state.json"
 TOKEN_FILE = "user_token.json"

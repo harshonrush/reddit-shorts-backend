@@ -1,0 +1,38 @@
+# Environment
+.env
+.venv/
+env/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Generated files
+*.mp3
+*.mp4
+*.ass
+*.srt
+
+# OAuth tokens (sensitive)
+user_token.json
+oauth_state.json
+oauth_state.txt
+flow.pkl
+
+# Google client secrets
+client_secret*.json
+
+# Local settings
+auto_post_settings.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

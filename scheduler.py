@@ -96,7 +96,11 @@ def daily_job(user_id: str = "default"):
         # 6. Render
         filename = f"auto_reel_{topic.replace(' ', '_')}.mp4"
         output_path = os.path.join(OUTPUT_DIR, filename)
-        render_video(audio_path, video_path, ass_path, output_path, max_duration=90)
+        result = render_video(audio_path, video_path, ass_path, output_path, max_duration=60)
+        
+        if not result:
+            print(f"[SCHEDULER] ❌ Render failed for user {user_id}")
+            return
         
         # 7. Cleanup temp files
         for f in [audio_path, video_path, ass_path]:

@@ -3,8 +3,10 @@ from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
 import os
 
+TOKENS_DIR = "tokens"
 
-def upload_video(file_path: str, title: str, description: str = "", tags: list = None) -> dict:
+
+def upload_video(file_path: str, title: str, description: str = "", tags: list = None, user_id: str = "default") -> dict:
     """Upload video to YouTube using OAuth token.
     
     Args:
@@ -12,14 +14,17 @@ def upload_video(file_path: str, title: str, description: str = "", tags: list =
         title: Video title
         description: Video description
         tags: List of tags (optional)
+        user_id: User identifier for token lookup
         
     Returns:
         YouTube API response with video ID
     """
-    if not os.path.exists("user_token.json"):
-        raise FileNotFoundError("user_token.json not found. Visit http://localhost:8000/auth/connect first to authenticate.")
+    token_path = os.path.join(TOKENS_DIR, f"{user_id}.json")
     
-    creds = Credentials.from_authorized_user_file("user_token.json")
+    if not os.path.exists(token_path):
+        raise FileNotFoundError(f"Token not found for user {user_id}. Visit /auth/connect first to authenticate.")
+    
+    creds = Credentials.from_authorized_user_file(token_path)
     youtube = build("youtube", "v3", credentials=creds)
     
     if tags is None:

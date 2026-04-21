@@ -1,8 +1,9 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import RedirectResponse
 from google_auth_oauthlib.flow import Flow
 import os
 import json
+import uuid
 
 router = APIRouter()
 
@@ -19,18 +20,29 @@ else:
             with open(f) as file:
                 client_config = json.load(file)
             break
+
 REDIRECT_URI = "https://reddit-shorts-backend-production.up.railway.app/auth/callback"
+TOKENS_DIR = "tokens"
+os.makedirs(TOKENS_DIR, exist_ok=True)
 
 STATE_FILE = "oauth_state.json"
-TOKEN_FILE = "user_token.json"
+
+
+def get_token_path(user_id: str):
+    """Get token file path for a user."""
+    return os.path.join(TOKENS_DIR, f"{user_id}.json")
 
 
 # 🔹 STEP 1: CONNECT
 @router.get("/auth/connect")
-def connect():
+def connect(user_id: str = Query(None)):
     try:
         if not client_config:
             return {"error": "GOOGLE_CLIENT_SECRET not set and no client_secret.json found"}
+
+        # Generate user_id if not provided
+        if not user_id:
+            user_id = str(uuid.uuid4())
 
         flow = Flow.from_client_config(
             client_config,
@@ -45,14 +57,16 @@ def connect():
             include_granted_scopes="true"
         )
 
-        # ✅ store state AND code_verifier (PKCE requirement)
+        # ✅ store state AND code_verifier (PKCE requirement) + user_id
         with open(STATE_FILE, "w") as f:
             json.dump({
                 "state": state,
-                "code_verifier": flow.code_verifier
+                "code_verifier": flow.code_verifier,
+                "user_id": user_id
             }, f)
 
-        return RedirectResponse(auth_url)
+        # Return auth URL with user_id for frontend
+        return {"auth_url": auth_url, "user_id": user_id}
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -69,6 +83,7 @@ def callback(code: str, state: str):
     saved_data = json.load(open(STATE_FILE))
     saved_state = saved_data["state"]
     code_verifier = saved_data.get("code_verifier")
+    user_id = saved_data.get("user_id", "default")
 
     if state != saved_state:
         return {"error": "State mismatch"}
@@ -88,16 +103,19 @@ def callback(code: str, state: str):
 
     creds = flow.credentials
 
-    with open(TOKEN_FILE, "w") as f:
+    # Save token per user
+    token_path = get_token_path(user_id)
+    with open(token_path, "w") as f:
         f.write(creds.to_json())
 
     os.remove(STATE_FILE)
 
-    # Redirect back to frontend settings page
-    return RedirectResponse("http://localhost:3000/settings")
+    # Redirect back to frontend settings page with user_id
+    return RedirectResponse(f"http://localhost:3000/settings?user_id={user_id}")
 
 
 # 🔹 STEP 3: STATUS
 @router.get("/auth/status")
-def status():
-    return {"connected": os.path.exists(TOKEN_FILE)}
+def status(user_id: str = Query("default")):
+    token_path = get_token_path(user_id)
+    return {"connected": os.path.exists(token_path), "user_id": user_id}

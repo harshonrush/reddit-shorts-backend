@@ -1,4 +1,15 @@
-from pydub import AudioSegment
+import subprocess
+import json
+
+def get_audio_duration(audio_path):
+    """Get audio duration using ffmpeg ffprobe."""
+    cmd = [
+        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        "-of", "json", audio_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    data = json.loads(result.stdout)
+    return float(data["format"]["duration"])
 
 def generate_ass(script, audio_path, path):
     """Generate ASS subtitles with timing based on audio duration.
@@ -12,8 +23,7 @@ def generate_ass(script, audio_path, path):
         Path to generated ASS file
     """
     # Get audio duration
-    audio = AudioSegment.from_file(audio_path)
-    total_duration = len(audio) / 1000  # seconds
+    total_duration = get_audio_duration(audio_path)
 
     words = script.split()
     words_per_line = 3

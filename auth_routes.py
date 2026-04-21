@@ -111,7 +111,9 @@ def callback(code: str, state: str):
     os.remove(STATE_FILE)
 
     # Redirect back to frontend settings page with user_id
-    return RedirectResponse(f"http://localhost:3000/settings?user_id={user_id}")
+    # Use production URL (update this to your actual frontend URL)
+    FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    return RedirectResponse(f"{FRONTEND_URL}/settings?user_id={user_id}")
 
 
 # 🔹 STEP 3: STATUS

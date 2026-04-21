@@ -145,16 +145,16 @@ async def health_check():
 
 # Auto-post settings endpoints
 @app.get("/settings/auto-post")
-async def get_auto_post_settings():
-    """Get current auto-post settings."""
-    return load_settings()
+async def get_auto_post_settings(user_id: str = "default"):
+    """Get current auto-post settings for a user."""
+    return load_settings(user_id)
 
 
 @app.post("/settings/auto-post")
-async def set_auto_post_settings(enabled: bool, hour: int = 18, minute: int = 0):
-    """Update auto-post settings."""
-    update_schedule(enabled, hour, minute)
-    return {"status": "updated", "enabled": enabled, "time": f"{hour}:{minute:02d}"}
+async def set_auto_post_settings(enabled: bool, hour: int = 18, minute: int = 0, user_id: str = "default"):
+    """Update auto-post settings for a user."""
+    update_schedule(enabled, hour, minute, user_id)
+    return {"status": "updated", "enabled": enabled, "time": f"{hour}:{minute:02d}", "user_id": user_id}
 
 
 if __name__ == "__main__":

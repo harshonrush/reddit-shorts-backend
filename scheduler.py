@@ -18,31 +18,39 @@ TOPICS = [
     "family secrets"
 ]
 
-# Settings file path
-SETTINGS_FILE = "auto_post_settings.json"
+# Settings directory
+SETTINGS_DIR = "settings"
+os.makedirs(SETTINGS_DIR, exist_ok=True)
 
 
-def load_settings():
-    """Load auto-post settings."""
+def get_settings_path(user_id: str):
+    """Get settings file path for a user."""
+    return os.path.join(SETTINGS_DIR, f"{user_id}.json")
+
+
+def load_settings(user_id: str = "default"):
+    """Load auto-post settings for a user."""
     import json
-    if os.path.exists(SETTINGS_FILE):
-        with open(SETTINGS_FILE, "r") as f:
+    settings_path = get_settings_path(user_id)
+    if os.path.exists(settings_path):
+        with open(settings_path, "r") as f:
             return json.load(f)
     return {"enabled": False, "hour": 18, "minute": 0}
 
 
-def save_settings(settings):
-    """Save auto-post settings."""
+def save_settings(settings, user_id: str = "default"):
+    """Save auto-post settings for a user."""
     import json
-    with open(SETTINGS_FILE, "w") as f:
+    settings_path = get_settings_path(user_id)
+    with open(settings_path, "w") as f:
         json.dump(settings, f)
 
 
-def daily_job():
+def daily_job(user_id: str = "default"):
     """Generate and upload video daily."""
-    settings = load_settings()
+    settings = load_settings(user_id)
     if not settings.get("enabled", False):
-        print("[SCHEDULER] Auto-post is disabled, skipping.")
+        print(f"[SCHEDULER] Auto-post disabled for user {user_id}, skipping.")
         return
     
     # Pick random topic
@@ -96,12 +104,13 @@ def daily_job():
                 os.remove(f)
         
         # 8. Upload to YouTube
-        print(f"[SCHEDULER] Uploading to YouTube...")
+        print(f"[SCHEDULER] Uploading to YouTube for user {user_id}...")
         res = upload_video(
             file_path=output_path,
             title=f"Crazy {topic.title()} Story",
             description=f"#{topic.replace(' ', '')} #shorts #reddit #storytime",
-            tags=["reddit", "story", "shorts", topic]
+            tags=["reddit", "story", "shorts", topic],
+            user_id=user_id
         )
         
         print(f"[SCHEDULER] ✅ Posted: https://youtube.com/watch?v={res['id']}")
@@ -112,37 +121,41 @@ def daily_job():
         traceback.print_exc()
 
 
-def start():
+def start(user_id: str = "default"):
     """Start the scheduler with loaded settings."""
-    settings = load_settings()
+    settings = load_settings(user_id)
     
     if settings.get("enabled", False):
         trigger = CronTrigger(
             hour=settings.get("hour", 18),
             minute=settings.get("minute", 0)
         )
-        scheduler.add_job(daily_job, trigger, id="daily_post", replace_existing=True)
+        job_id = f"daily_post_{user_id}"
+        scheduler.add_job(daily_job, trigger, id=job_id, replace_existing=True, args=[user_id])
         scheduler.start()
-        print(f"[SCHEDULER] Started - daily at {settings.get('hour', 18)}:{settings.get('minute', 0):02d}")
+        print(f"[SCHEDULER] Started for user {user_id} - daily at {settings.get('hour', 18)}:{settings.get('minute', 0):02d}")
     else:
         # Start scheduler but no jobs
-        scheduler.start()
-        print("[SCHEDULER] Started (auto-post disabled)")
+        if not scheduler.running:
+            scheduler.start()
+        print(f"[SCHEDULER] Started for user {user_id} (auto-post disabled)")
 
 
-def update_schedule(enabled: bool, hour: int = 18, minute: int = 0):
-    """Update schedule settings."""
-    save_settings({"enabled": enabled, "hour": hour, "minute": minute})
+def update_schedule(enabled: bool, hour: int = 18, minute: int = 0, user_id: str = "default"):
+    """Update schedule settings for a user."""
+    save_settings({"enabled": enabled, "hour": hour, "minute": minute}, user_id)
+    
+    job_id = f"daily_post_{user_id}"
     
     # Remove existing job
     try:
-        scheduler.remove_job("daily_post")
+        scheduler.remove_job(job_id)
     except:
         pass
     
     if enabled:
         trigger = CronTrigger(hour=hour, minute=minute)
-        scheduler.add_job(daily_job, trigger, id="daily_post", replace_existing=True)
-        print(f"[SCHEDULER] Updated - daily at {hour}:{minute:02d}")
+        scheduler.add_job(daily_job, trigger, id=job_id, replace_existing=True, args=[user_id])
+        print(f"[SCHEDULER] Updated for user {user_id} - daily at {hour}:{minute:02d}")
     else:
-        print("[SCHEDULER] Auto-post disabled")
+        print(f"[SCHEDULER] Auto-post disabled for user {user_id}")

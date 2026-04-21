@@ -192,8 +192,23 @@ def run_cron():
     from scheduler import daily_job, SETTINGS_DIR, load_settings
     import threading
     
-    now = datetime.utcnow()  # Railway uses UTC
-    print(f"[CRON HIT] {now.isoformat()}")
+    # Convert UTC to IST for comparison (user stores time in IST)
+    ist = datetime.utcnow()
+    ist = ist.replace(hour=(ist.hour + 5) % 24)  # UTC+5 for IST (simplified)
+    if datetime.utcnow().hour >= 19:  # Handle day wrap
+        pass  # Keep same day logic simple for now
+    
+    # Better approach: use pytz if available, else simple offset
+    try:
+        import pytz
+        ist = pytz.timezone("Asia/Kolkata")
+        now = datetime.now(ist)
+    except:
+        # Fallback: manual IST calculation (UTC+5:30)
+        from datetime import timedelta
+        now = datetime.utcnow() + timedelta(hours=5, minutes=30)
+    
+    print(f"[CRON HIST IST] {now}")
     
     triggered = []
     
@@ -207,13 +222,13 @@ def run_cron():
                 if not settings.get("enabled", False):
                     continue
                 
-                # Get scheduled time (stored as UTC)
+                # Get scheduled time (stored as IST)
                 scheduled_hour = settings.get("hour", 18)
                 scheduled_minute = settings.get("minute", 0)
                 
-                # Check if current UTC time matches scheduled time (within 5-min window)
-                if now.hour == scheduled_hour and abs(now.minute - scheduled_minute) < 5:
-                    print(f"[CRON] Triggering for user {user_id} at {now.hour}:{now.minute:02d}")
+                # Check if current IST time matches scheduled time (within 2-min window)
+                if now.hour == scheduled_hour and abs(now.minute - scheduled_minute) <= 2:
+                    print(f"[CRON RUNNING] {user_id}")
                     
                     # Run in background thread
                     def run_job(uid=user_id):
@@ -223,7 +238,7 @@ def run_cron():
                     thread.start()
                     triggered.append(user_id)
     
-    return {"status": "checked", "triggered": triggered, "time": now.isoformat()}
+    return {"status": "checked", "triggered": triggered, "time": str(now)}
 
 
 if __name__ == "__main__":

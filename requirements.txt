@@ -7,7 +7,7 @@ requests==2.32.0
 python-multipart==0.0.9
 python-dotenv==1.0.1
 pydub==0.25.1
-pyaudioop==0.1
+audioop-lts==0.2.1
 google-auth==2.27.0
 google-auth-oauthlib==1.2.0
 google-api-python-client==2.118.0

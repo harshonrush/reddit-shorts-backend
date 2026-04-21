@@ -6,13 +6,19 @@ import json
 
 router = APIRouter()
 
-CLIENT_SECRET_FILE = None
-for f in os.listdir("."):
-    if f.startswith("client_secret") and f.endswith(".json"):
-        CLIENT_SECRET_FILE = f
-        break
-
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+
+# Load client secret from environment variable
+client_config = None
+if os.getenv("GOOGLE_CLIENT_SECRET"):
+    client_config = json.loads(os.getenv("GOOGLE_CLIENT_SECRET"))
+else:
+    # Fallback: look for client_secret file
+    for f in os.listdir("."):
+        if f.startswith("client_secret") and f.endswith(".json"):
+            with open(f) as file:
+                client_config = json.load(file)
+            break
 REDIRECT_URI = "https://reddit-shorts-backend-production.up.railway.app/auth/callback"
 
 STATE_FILE = "oauth_state.json"
@@ -23,12 +29,11 @@ TOKEN_FILE = "user_token.json"
 @router.get("/auth/connect")
 def connect():
     try:
-        if not CLIENT_SECRET_FILE:
-            json_files = [f for f in os.listdir('.') if f.endswith('.json')]
-            return {"error": f"client_secret.json missing. Files found: {json_files}"}
+        if not client_config:
+            return {"error": "GOOGLE_CLIENT_SECRET not set and no client_secret.json found"}
 
-        flow = Flow.from_client_secrets_file(
-            CLIENT_SECRET_FILE,
+        flow = Flow.from_client_config(
+            client_config,
             scopes=SCOPES,
             redirect_uri=REDIRECT_URI
         )
@@ -68,8 +73,8 @@ def callback(code: str, state: str):
     if state != saved_state:
         return {"error": "State mismatch"}
 
-    flow = Flow.from_client_secrets_file(
-        CLIENT_SECRET_FILE,
+    flow = Flow.from_client_config(
+        client_config,
         scopes=SCOPES,
         state=saved_state,
         redirect_uri=REDIRECT_URI

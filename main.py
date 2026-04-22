@@ -151,10 +151,10 @@ async def get_auto_post_settings(user_id: str = "default"):
 
 
 @app.post("/settings/auto-post")
-async def set_auto_post_settings(enabled: bool, hour: int = 18, minute: int = 0, user_id: str = "default"):
+async def set_auto_post_settings(enabled: bool, hour: int = 18, minute: int = 0, user_id: str = "default", niche: str = "stories"):
     """Update auto-post settings for a user."""
-    update_schedule(enabled, hour, minute, user_id)
-    return {"status": "updated", "enabled": enabled, "time": f"{hour}:{minute:02d}", "user_id": user_id}
+    update_schedule(enabled, hour, minute, user_id, niche)
+    return {"status": "updated", "enabled": enabled, "time": f"{hour}:{minute:02d}", "user_id": user_id, "niche": niche}
 
 
 # Trigger endpoint for external cron service

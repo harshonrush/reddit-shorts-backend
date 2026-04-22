@@ -6,7 +6,16 @@ import os
 
 scheduler = BackgroundScheduler()
 
-# Viral topics pool
+# Niche-based topic mapping
+NICHE_TOPICS = {
+    "heartbreak": ["heartbreak", "breakup recovery", "moving on", "lost love", "emotional healing"],
+    "motivation": ["discipline", "morning routine", "success mindset", "never give up", "transformation"],
+    "business": ["startup struggle", "entrepreneur journey", "side hustle success", "business betrayal", "rags to riches"],
+    "fitness": ["gym discipline", "weight loss journey", "fitness transformation", "mental strength", "health wake-up call"],
+    "stories": ["creepy encounter", "strange neighbor", "mystery solved", "unexpected twist", "life changing moment"]
+}
+
+# Default random topics for backward compatibility
 TOPICS = [
     "heartbreak",
     "cheating",
@@ -35,7 +44,7 @@ def load_settings(user_id: str = "default"):
     if os.path.exists(settings_path):
         with open(settings_path, "r") as f:
             return json.load(f)
-    return {"enabled": False, "hour": 18, "minute": 0}
+    return {"enabled": False, "hour": 18, "minute": 0, "niche": "stories"}
 
 
 def save_settings(settings, user_id: str = "default"):
@@ -53,9 +62,13 @@ def daily_job(user_id: str = "default"):
         print(f"[SCHEDULER] Auto-post disabled for user {user_id}, skipping.")
         return
     
-    # Pick random topic
-    topic = random.choice(TOPICS)
-    print(f"[SCHEDULER] Generating video for topic: {topic}")
+    # Pick topic based on user's niche
+    niche = settings.get("niche", "stories")
+    if niche in NICHE_TOPICS:
+        topic = random.choice(NICHE_TOPICS[niche])
+    else:
+        topic = random.choice(TOPICS)
+    print(f"[SCHEDULER] Niche: {niche} | Topic: {topic}")
     
     try:
         # Import here to avoid circular imports
@@ -145,9 +158,17 @@ def start(user_id: str = "default"):
         print(f"[SCHEDULER] Started for user {user_id} (auto-post disabled)")
 
 
-def update_schedule(enabled: bool, hour: int = 18, minute: int = 0, user_id: str = "default"):
+def update_schedule(enabled: bool, hour: int = 18, minute: int = 0, user_id: str = "default", niche: str = None):
     """Update schedule settings for a user."""
-    save_settings({"enabled": enabled, "hour": hour, "minute": minute}, user_id)
+    # Load existing settings to preserve niche
+    existing = load_settings(user_id)
+    settings = {
+        "enabled": enabled,
+        "hour": hour,
+        "minute": minute,
+        "niche": niche if niche else existing.get("niche", "stories")
+    }
+    save_settings(settings, user_id)
     
     job_id = f"daily_post_{user_id}"
     

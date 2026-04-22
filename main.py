@@ -36,6 +36,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 class GenerateRequest(BaseModel):
     topic: str
+    user_id: str = "default"
 
 
 class UploadRequest(BaseModel):
@@ -74,9 +75,11 @@ async def generate_video(request: GenerateRequest):
             ass_path = f.name
         generate_ass(script, audio_path, ass_path)
 
-        # 6. Output file
+        # 6. Output file (per-user folder)
+        user_output_dir = os.path.join(OUTPUT_DIR, request.user_id)
+        os.makedirs(user_output_dir, exist_ok=True)
         filename = f"reel_{safe_filename(request.topic)}.mp4"
-        output_path = os.path.join(OUTPUT_DIR, filename)
+        output_path = os.path.join(user_output_dir, filename)
 
         # 7. Render (IMPORTANT: limit duration)
         render_video(audio_path, video_path, ass_path, output_path, max_duration=90)
@@ -186,10 +189,15 @@ async def trigger_daily_post(user_id: str = "default", secret: str = None):
 
 # Cron endpoint for cron-job.org (runs every 5 minutes)
 @app.get("/cron/run")
-def run_cron():
+def run_cron(secret: str = None):
     """Check all users and run daily job if scheduled time matches."""
+    # Security check
+    cron_secret = os.getenv("CRON_SECRET")
+    if cron_secret and secret != cron_secret:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
     from datetime import datetime, timedelta
-    from scheduler import daily_job, SETTINGS_DIR, load_settings
+    from scheduler import daily_job, SETTINGS_DIR, load_settings, save_settings
     import threading
     
     # Convert UTC to IST for comparison (user stores time in IST)
@@ -219,13 +227,19 @@ def run_cron():
                 scheduled_hour = settings.get("hour", 18)
                 scheduled_minute = settings.get("minute", 0)
                 
+                # Check if already posted today (prevent duplicates)
+                today = now.strftime("%Y-%m-%d")
+                last_posted = settings.get("last_posted_date")
+                if last_posted == today:
+                    print(f"[CRON SKIP] {user_id} already posted today ({today})")
+                    continue
+                
                 # Create datetime objects for comparison
                 scheduled_time = now.replace(hour=scheduled_hour, minute=scheduled_minute, second=0, microsecond=0)
-                time_diff = abs((now - scheduled_time).total_seconds())
                 
-                # Strict ±2 minutes window (120 seconds)
-                # Skip if outside time window
-                if time_diff > 120:
+                # Only trigger if: scheduled_time <= now <= scheduled_time + 2 min
+                # (No early triggers - only at or after scheduled time)
+                if not (scheduled_time <= now <= scheduled_time + timedelta(minutes=2)):
                     continue
                 
                 print(f"[CRON RUNNING] {user_id} at {now.strftime('%H:%M')} (scheduled {scheduled_hour}:{scheduled_minute:02d})")
@@ -236,6 +250,12 @@ def run_cron():
                 
                 thread = threading.Thread(target=run_job)
                 thread.start()
+                
+                # Mark as posted for today (prevent duplicate runs)
+                settings["last_posted_date"] = today
+                save_settings(settings, user_id)
+                print(f"[CRON MARKED] {user_id} as posted for {today}")
+                
                 triggered.append(user_id)
     
     return {"status": "checked", "triggered": triggered, "time": now.isoformat()}

@@ -188,27 +188,20 @@ async def trigger_daily_post(user_id: str = "default", secret: str = None):
 @app.get("/cron/run")
 def run_cron():
     """Check all users and run daily job if scheduled time matches."""
-    from datetime import datetime
+    from datetime import datetime, timedelta
     from scheduler import daily_job, SETTINGS_DIR, load_settings
     import threading
     
     # Convert UTC to IST for comparison (user stores time in IST)
-    ist = datetime.utcnow()
-    ist = ist.replace(hour=(ist.hour + 5) % 24)  # UTC+5 for IST (simplified)
-    if datetime.utcnow().hour >= 19:  # Handle day wrap
-        pass  # Keep same day logic simple for now
-    
-    # Better approach: use pytz if available, else simple offset
     try:
         import pytz
         ist = pytz.timezone("Asia/Kolkata")
         now = datetime.now(ist)
     except:
         # Fallback: manual IST calculation (UTC+5:30)
-        from datetime import timedelta
         now = datetime.utcnow() + timedelta(hours=5, minutes=30)
     
-    print(f"[CRON HIST IST] {now}")
+    print(f"[CRON HIT IST] {now.strftime('%H:%M')}")
     
     triggered = []
     
@@ -226,9 +219,14 @@ def run_cron():
                 scheduled_hour = settings.get("hour", 18)
                 scheduled_minute = settings.get("minute", 0)
                 
-                # Check if current IST time matches scheduled time (within 2-min window)
-                if now.hour == scheduled_hour and abs(now.minute - scheduled_minute) <= 2:
-                    print(f"[CRON RUNNING] {user_id}")
+                # Create datetime objects for comparison
+                scheduled_time = now.replace(hour=scheduled_hour, minute=scheduled_minute, second=0, microsecond=0)
+                time_diff = abs((now - scheduled_time).total_seconds())
+                
+                # Check if within ±5 minutes window (300 seconds)
+                # Also handle day wrap (e.g., 23:59 vs 00:00)
+                if time_diff <= 300 or time_diff >= 85800:  # 85800 = 24h - 5min
+                    print(f"[CRON RUNNING] {user_id} at {now.strftime('%H:%M')} (scheduled {scheduled_hour}:{scheduled_minute:02d})")
                     
                     # Run in background thread
                     def run_job(uid=user_id):
@@ -238,7 +236,7 @@ def run_cron():
                     thread.start()
                     triggered.append(user_id)
     
-    return {"status": "checked", "triggered": triggered, "time": str(now)}
+    return {"status": "checked", "triggered": triggered, "time": now.isoformat()}
 
 
 if __name__ == "__main__":

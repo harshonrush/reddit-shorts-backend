@@ -51,14 +51,15 @@ def safe_filename(text):
 
 @app.post("/generate")
 async def generate_video(request: GenerateRequest):
+    audio_path = video_path = ass_path = None
+
     try:
         # 1. Story
         story = generate_story(request.topic)
 
-        # 2. Script (IMPORTANT: trim length)
+        # 2. Script
         script = generate_script(story)
-        words = script.split()[:120]  # limit words
-        script = " ".join(words)
+        script = " ".join(script.split()[:120])
 
         # 3. Audio
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
@@ -70,32 +71,32 @@ async def generate_video(request: GenerateRequest):
             video_path = f.name
         fetch_video(video_path)
 
-        # 5. Subtitles (ASS format with audio-synced timing)
+        # 5. Subtitles
         with tempfile.NamedTemporaryFile(suffix=".ass", delete=False) as f:
             ass_path = f.name
         generate_ass(script, audio_path, ass_path)
 
-        # 6. Output file (per-user folder)
+        # 6. Per-user output
         user_output_dir = os.path.join(OUTPUT_DIR, request.user_id)
         os.makedirs(user_output_dir, exist_ok=True)
+
         filename = f"reel_{safe_filename(request.topic)}.mp4"
         output_path = os.path.join(user_output_dir, filename)
 
-        # 7. Render (IMPORTANT: limit duration)
+        # 7. Render
         render_video(audio_path, video_path, ass_path, output_path, max_duration=90)
 
-        # 8. Cleanup
-        for f in [audio_path, video_path, ass_path]:
-            if os.path.exists(f):
-                os.remove(f)
-
-        # 9. Return video directly (BEST for now)
         return FileResponse(output_path, media_type="video/mp4", filename=filename)
 
     except Exception as e:
         print(f"ERROR: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        for f in [audio_path, video_path, ass_path]:
+            if f and os.path.exists(f):
+                os.remove(f)
 
 
 @app.post("/upload")
@@ -113,25 +114,38 @@ async def upload_to_youtube(request: UploadRequest):
 
 
 @app.post("/upload-latest")
-async def upload_latest():
+async def upload_latest(user_id: str = "default"):
     """Upload most recent generated video (for testing)."""
     try:
-        # Find most recent video in output dir
-        videos = [f for f in os.listdir(OUTPUT_DIR) if f.endswith('.mp4')]
+        user_dir = os.path.join(OUTPUT_DIR, user_id)
+
+        if not os.path.exists(user_dir):
+            raise HTTPException(status_code=404, detail="No videos for this user.")
+
+        videos = [f for f in os.listdir(user_dir) if f.endswith(".mp4")]
+
         if not videos:
-            raise HTTPException(status_code=404, detail="No videos found. Generate one first.")
-        
-        # Get most recent
-        videos.sort(key=lambda x: os.path.getmtime(os.path.join(OUTPUT_DIR, x)), reverse=True)
-        latest = os.path.join(OUTPUT_DIR, videos[0])
-        
+            raise HTTPException(status_code=404, detail="No videos found.")
+
+        videos.sort(
+            key=lambda x: os.path.getmtime(os.path.join(user_dir, x)),
+            reverse=True
+        )
+
+        latest = os.path.join(user_dir, videos[0])
+
         res = upload_video(
             file_path=latest,
             title="Crazy Reddit Story",
             description="#shorts #reddit #storytime",
             tags=["reddit", "story", "shorts", "viral"]
         )
-        return {"status": "uploaded", "youtube_id": res["id"], "url": f"https://youtube.com/watch?v={res['id']}"}
+
+        return {
+            "status": "uploaded",
+            "youtube_id": res["id"],
+            "url": f"https://youtube.com/watch?v={res['id']}"
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -227,35 +241,44 @@ def run_cron(secret: str = None):
                 scheduled_hour = settings.get("hour", 18)
                 scheduled_minute = settings.get("minute", 0)
                 
-                # Check if already posted today (prevent duplicates)
+                # Prevent duplicate posting
                 today = now.strftime("%Y-%m-%d")
-                last_posted = settings.get("last_posted_date")
-                if last_posted == today:
-                    print(f"[CRON SKIP] {user_id} already posted today ({today})")
+                if settings.get("last_posted_date") == today:
                     continue
-                
-                # Create datetime objects for comparison
-                scheduled_time = now.replace(hour=scheduled_hour, minute=scheduled_minute, second=0, microsecond=0)
-                
-                # Only trigger if: scheduled_time <= now <= scheduled_time + 2 min
-                # (No early triggers - only at or after scheduled time)
+
+                # Lock to prevent race condition
+                if settings.get("is_posting"):
+                    continue
+
+                scheduled_time = now.replace(
+                    hour=scheduled_hour,
+                    minute=scheduled_minute,
+                    second=0,
+                    microsecond=0
+                )
+
                 if not (scheduled_time <= now <= scheduled_time + timedelta(minutes=2)):
                     continue
-                
-                print(f"[CRON RUNNING] {user_id} at {now.strftime('%H:%M')} (scheduled {scheduled_hour}:{scheduled_minute:02d})")
-                
-                # Run in background thread
+
+                print(f"[CRON RUNNING] {user_id}")
+
+                # Set lock
+                settings["is_posting"] = True
+                save_settings(settings, user_id)
+
                 def run_job(uid=user_id):
-                    daily_job(uid)
-                
+                    from scheduler import daily_job
+                    try:
+                        daily_job(uid)
+                    finally:
+                        # Release lock
+                        s = load_settings(uid)
+                        s["is_posting"] = False
+                        save_settings(s, uid)
+
                 thread = threading.Thread(target=run_job)
                 thread.start()
-                
-                # Mark as posted for today (prevent duplicate runs)
-                settings["last_posted_date"] = today
-                save_settings(settings, user_id)
-                print(f"[CRON MARKED] {user_id} as posted for {today}")
-                
+
                 triggered.append(user_id)
     
     return {"status": "checked", "triggered": triggered, "time": now.isoformat()}

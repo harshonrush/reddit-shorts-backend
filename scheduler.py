@@ -1,10 +1,16 @@
 """Auto-posting scheduler for daily video generation and upload."""
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 import random
 import os
+import json
+import logging
+import time
 
-scheduler = BackgroundScheduler()
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Niche-based topic mapping
 NICHE_TOPICS = {
@@ -106,9 +112,11 @@ def daily_job(user_id: str = "default"):
             ass_path = f.name
         generate_ass(script, audio_path, ass_path)
         
-        # 6. Render
+        # 6. Render (per-user folder)
+        user_output_dir = os.path.join(OUTPUT_DIR, user_id)
+        os.makedirs(user_output_dir, exist_ok=True)
         filename = f"auto_reel_{topic.replace(' ', '_')}.mp4"
-        output_path = os.path.join(OUTPUT_DIR, filename)
+        output_path = os.path.join(user_output_dir, filename)
         result = render_video(audio_path, video_path, ass_path, output_path, max_duration=60)
         
         if not result:
@@ -120,74 +128,44 @@ def daily_job(user_id: str = "default"):
             if os.path.exists(f):
                 os.remove(f)
         
-        # 8. Upload to YouTube
-        print(f"[SCHEDULER] Uploading to YouTube for user {user_id}...")
-        res = upload_video(
-            file_path=output_path,
-            title=f"Crazy {topic.title()} Story",
-            description=f"#{topic.replace(' ', '')} #shorts #reddit #storytime",
-            tags=["reddit", "story", "shorts", topic],
-            user_id=user_id
-        )
+        # 8. Upload to YouTube (with retry)
+        logger.info(f"Uploading to YouTube for user {user_id}...")
+        res = None
+        for attempt in range(3):
+            try:
+                res = upload_video(
+                    file_path=output_path,
+                    title=f"Crazy {topic.title()} Story",
+                    description=f"#{topic.replace(' ', '')} #shorts #reddit #storytime",
+                    tags=["reddit", "story", "shorts", topic],
+                    user_id=user_id
+                )
+                break
+            except Exception as e:
+                logger.error(f"Upload attempt {attempt + 1} failed: {e}")
+                if attempt == 2:  # Last attempt
+                    raise e
+                time.sleep(5)  # Wait 5s before retry
         
-        print(f"[SCHEDULER] ✅ Posted: https://youtube.com/watch?v={res['id']}")
-        
-        # Mark as posted today in settings (prevent duplicates)
-        from datetime import datetime
-        settings = load_settings(user_id)
-        settings["last_posted_date"] = datetime.now().strftime("%Y-%m-%d")
-        save_settings(settings, user_id)
-        print(f"[SCHEDULER] Marked {user_id} as posted for today")
+        logger.info(f"Posted: https://youtube.com/watch?v={res['id']}")
         
     except Exception as e:
-        print(f"[SCHEDULER] ❌ Error: {e}")
+        logger.error(f"Error in daily_job for {user_id}: {e}")
         import traceback
-        traceback.print_exc()
-
-
-def start(user_id: str = "default"):
-    """Start the scheduler with loaded settings."""
-    settings = load_settings(user_id)
-    
-    if settings.get("enabled", False):
-        trigger = CronTrigger(
-            hour=settings.get("hour", 18),
-            minute=settings.get("minute", 0)
-        )
-        job_id = f"daily_post_{user_id}"
-        scheduler.add_job(daily_job, trigger, id=job_id, replace_existing=True, args=[user_id])
-        scheduler.start()
-        print(f"[SCHEDULER] Started for user {user_id} - daily at {settings.get('hour', 18)}:{settings.get('minute', 0):02d}")
-    else:
-        # Start scheduler but no jobs
-        if not scheduler.running:
-            scheduler.start()
-        print(f"[SCHEDULER] Started for user {user_id} (auto-post disabled)")
+        logger.error(traceback.format_exc())
 
 
 def update_schedule(enabled: bool, hour: int = 18, minute: int = 0, user_id: str = "default", niche: str = None):
     """Update schedule settings for a user."""
-    # Load existing settings to preserve niche
-    existing = load_settings(user_id)
-    settings = {
-        "enabled": enabled,
-        "hour": hour,
-        "minute": minute,
-        "niche": niche if niche else existing.get("niche", "stories")
-    }
+    # Load existing settings to preserve fields like last_posted_date, is_posting
+    settings = load_settings(user_id)
+    
+    # Update only the provided fields
+    settings["enabled"] = enabled
+    settings["hour"] = hour
+    settings["minute"] = minute
+    if niche:
+        settings["niche"] = niche
+    
     save_settings(settings, user_id)
-    
-    job_id = f"daily_post_{user_id}"
-    
-    # Remove existing job
-    try:
-        scheduler.remove_job(job_id)
-    except:
-        pass
-    
-    if enabled:
-        trigger = CronTrigger(hour=hour, minute=minute)
-        scheduler.add_job(daily_job, trigger, id=job_id, replace_existing=True, args=[user_id])
-        print(f"[SCHEDULER] Updated for user {user_id} - daily at {hour}:{minute:02d}")
-    else:
-        print(f"[SCHEDULER] Auto-post disabled for user {user_id}")
+    print(f"[SCHEDULER] Settings saved for user {user_id} - enabled={enabled} at {hour}:{minute:02d}")

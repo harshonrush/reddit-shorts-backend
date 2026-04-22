@@ -152,7 +152,8 @@ async def upload_latest(user_id: str = "default"):
 
 @app.on_event("startup")
 def on_startup():
-    start_scheduler()
+    # No APScheduler - using external cron only
+    pass
 
 
 @app.get("/health")
@@ -250,20 +251,27 @@ def run_cron(secret: str = None):
                 if settings.get("is_posting"):
                     continue
 
+                # Time window: 0 to 300 seconds (5 min) after scheduled time
                 scheduled_time = now.replace(
                     hour=scheduled_hour,
                     minute=scheduled_minute,
                     second=0,
                     microsecond=0
                 )
-
-                if not (scheduled_time <= now <= scheduled_time + timedelta(minutes=2)):
+                time_diff = (now - scheduled_time).total_seconds()
+                
+                # Handle day wrap (e.g., 23:59 scheduled, 00:01 now)
+                if time_diff < 0:
+                    time_diff += 86400  # Add 24 hours
+                
+                if not (0 <= time_diff <= 300):  # 0 to 5 minutes window
                     continue
 
-                print(f"[CRON RUNNING] {user_id}")
+                print(f"[CRON RUNNING] {user_id} at {now.strftime('%H:%M')} (scheduled {scheduled_hour}:{scheduled_minute:02d})")
 
-                # Set lock
+                # Set lock AND mark as posted (atomically)
                 settings["is_posting"] = True
+                settings["last_posted_date"] = today
                 save_settings(settings, user_id)
 
                 def run_job(uid=user_id):
@@ -271,7 +279,7 @@ def run_cron(secret: str = None):
                     try:
                         daily_job(uid)
                     finally:
-                        # Release lock
+                        # Release lock only
                         s = load_settings(uid)
                         s["is_posting"] = False
                         save_settings(s, uid)

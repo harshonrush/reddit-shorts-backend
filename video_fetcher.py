@@ -5,7 +5,7 @@ import requests
 SAMPLE_VIDEO = os.path.join("..", "assets", "sample.mp4")
 
 # Public domain sample video URL (fallback)
-SAMPLE_VIDEO_URL = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+SAMPLE_VIDEO_URL = "https://samplelib.com/lib/preview/mp4/sample-5s.mp4"
 
 
 def fetch_video(output_path: str, query: str = None) -> str:

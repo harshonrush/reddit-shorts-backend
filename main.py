@@ -223,18 +223,20 @@ def run_cron():
                 scheduled_time = now.replace(hour=scheduled_hour, minute=scheduled_minute, second=0, microsecond=0)
                 time_diff = abs((now - scheduled_time).total_seconds())
                 
-                # Check if within ±5 minutes window (300 seconds)
-                # Also handle day wrap (e.g., 23:59 vs 00:00)
-                if time_diff <= 300 or time_diff >= 85800:  # 85800 = 24h - 5min
-                    print(f"[CRON RUNNING] {user_id} at {now.strftime('%H:%M')} (scheduled {scheduled_hour}:{scheduled_minute:02d})")
-                    
-                    # Run in background thread
-                    def run_job(uid=user_id):
-                        daily_job(uid)
-                    
-                    thread = threading.Thread(target=run_job)
-                    thread.start()
-                    triggered.append(user_id)
+                # Strict ±2 minutes window (120 seconds)
+                # Skip if outside time window
+                if time_diff > 120:
+                    continue
+                
+                print(f"[CRON RUNNING] {user_id} at {now.strftime('%H:%M')} (scheduled {scheduled_hour}:{scheduled_minute:02d})")
+                
+                # Run in background thread
+                def run_job(uid=user_id):
+                    daily_job(uid)
+                
+                thread = threading.Thread(target=run_job)
+                thread.start()
+                triggered.append(user_id)
     
     return {"status": "checked", "triggered": triggered, "time": now.isoformat()}
 

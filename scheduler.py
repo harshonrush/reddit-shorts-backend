@@ -3,35 +3,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import random
 import os
-import json
-from datetime import date
-
-# Post log file (tracks daily uploads per user)
-LOG_FILE = "post_log.json"
-
-
-def has_posted_today(user_id: str) -> bool:
-    """Check if user already posted today."""
-    if not os.path.exists(LOG_FILE):
-        return False
-    
-    with open(LOG_FILE, "r") as f:
-        data = json.load(f)
-    
-    return data.get(user_id) == str(date.today())
-
-
-def mark_posted(user_id: str):
-    """Mark user as posted today."""
-    data = {}
-    if os.path.exists(LOG_FILE):
-        with open(LOG_FILE, "r") as f:
-            data = json.load(f)
-    
-    data[user_id] = str(date.today())
-    
-    with open(LOG_FILE, "w") as f:
-        json.dump(data, f)
 
 scheduler = BackgroundScheduler()
 
@@ -86,11 +57,6 @@ def save_settings(settings, user_id: str = "default"):
 
 def daily_job(user_id: str = "default"):
     """Generate and upload video daily."""
-    # Check if already posted today
-    if has_posted_today(user_id):
-        print(f"[SCHEDULER] ⚠️ Already posted today for user {user_id}, skipping.")
-        return
-    
     settings = load_settings(user_id)
     if not settings.get("enabled", False):
         print(f"[SCHEDULER] Auto-post disabled for user {user_id}, skipping.")
@@ -166,8 +132,11 @@ def daily_job(user_id: str = "default"):
         
         print(f"[SCHEDULER] ✅ Posted: https://youtube.com/watch?v={res['id']}")
         
-        # Mark as posted today to prevent duplicates
-        mark_posted(user_id)
+        # Mark as posted today in settings (prevent duplicates)
+        from datetime import datetime
+        settings = load_settings(user_id)
+        settings["last_posted_date"] = datetime.now().strftime("%Y-%m-%d")
+        save_settings(settings, user_id)
         print(f"[SCHEDULER] Marked {user_id} as posted for today")
         
     except Exception as e:

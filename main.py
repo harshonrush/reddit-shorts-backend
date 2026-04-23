@@ -244,21 +244,27 @@ def run_cron(secret: str):
     print(f"[CRON HIT IST] {now.strftime('%H:%M')}")
     
     triggered = []
+    today = now.strftime("%Y-%m-%d")
     
-    # Query all user settings from Supabase
-    res = supabase.table("users_settings").select("*").execute()
+    # 🚀 Single JOIN query: users_settings + user_tokens, only enabled users
+    res = supabase.table("users_settings") \
+        .select("*,user_tokens(*)") \
+        .eq("enabled", True) \
+        .execute()
     
     for settings in res.data:
         user_id = settings["user_id"]
         
-        if not settings.get("enabled"):
-            continue
-        
         if settings.get("is_posting"):
             continue
         
-        today = now.strftime("%Y-%m-%d")
         if settings.get("last_posted_date") == today:
+            continue
+        
+        # Check token exists from joined data
+        token_data = settings.get("user_tokens")
+        if not token_data:
+            print(f"[CRON SKIP] {user_id} no YouTube token")
             continue
         
         scheduled_time = now.replace(
@@ -273,27 +279,36 @@ def run_cron(secret: str):
         if diff_minutes > 10:
             continue
 
-        # 🚨 RE-CHECK: Race condition protection
-        # Query fresh data right before locking
-        fresh = supabase.table("users_settings").select("is_posting,last_posted_date").eq("user_id", user_id).execute()
-        if not fresh.data:
+        # 🚨 ATOMIC LOCK: Only one process wins
+        # Try to set is_posting=True ONLY if:
+        # 1. is_posting = False (not already running)
+        # 2. last_posted_date IS NULL OR last_posted_date != today (not posted today)
+        # We need an OR condition - try NULL first, if fails try not-today
+        lock_res = None
+        
+        # Try: is_posting=False AND last_posted_date IS NULL
+        lock_res = supabase.table("users_settings") \
+            .update({"is_posting": True}) \
+            .eq("user_id", user_id) \
+            .eq("is_posting", False) \
+            .is_("last_posted_date", None) \
+            .execute()
+        
+        # If NULL failed, try: is_posting=False AND last_posted_date != today
+        if not lock_res.data:
+            lock_res = supabase.table("users_settings") \
+                .update({"is_posting": True}) \
+                .eq("user_id", user_id) \
+                .eq("is_posting", False) \
+                .neq("last_posted_date", today) \
+                .execute()
+        
+        # If no rows updated, lock failed (someone else got it or posted today)
+        if not lock_res.data:
+            print(f"[CRON SKIP] {user_id} lock failed (already posting or posted today)")
             continue
-        user = fresh.data[0]
 
-        if user.get("is_posting"):
-            print(f"[CRON SKIP] {user_id} already posting (race condition caught)")
-            continue
-
-        if user.get("last_posted_date") == today:
-            print(f"[CRON SKIP] {user_id} already posted today")
-            continue
-
-        print(f"[CRON RUNNING] {user_id}")
-
-        # LOCK + MARK
-        save_settings(user_id, {
-            "is_posting": True
-        })
+        print(f"[CRON RUNNING] {user_id} (lock acquired)")
         
         def run_job(uid=user_id, date_str=today):
             try:

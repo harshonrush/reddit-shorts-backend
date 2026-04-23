@@ -2,12 +2,31 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
 import os
+from db import supabase
 
-TOKENS_DIR = "tokens"
+
+def load_credentials_from_supabase(user_id: str) -> Credentials:
+    """Load YouTube credentials from Supabase user_tokens table."""
+    res = supabase.table("user_tokens").select("*").eq("user_id", user_id).execute()
+    
+    if not res.data:
+        raise FileNotFoundError(f"Token not found for user {user_id}. Visit /auth/connect first to authenticate.")
+    
+    token_data = res.data[0]
+    
+    return Credentials(
+        token=token_data["access_token"],
+        refresh_token=token_data["refresh_token"],
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
+        client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
+        scopes=["https://www.googleapis.com/auth/youtube.upload"],
+        expiry=token_data.get("expiry")
+    )
 
 
 def upload_video(file_path: str, title: str, description: str = "", tags: list = None, user_id: str = "default") -> dict:
-    """Upload video to YouTube using OAuth token.
+    """Upload video to YouTube using OAuth token from Supabase.
     
     Args:
         file_path: Path to video file
@@ -19,12 +38,7 @@ def upload_video(file_path: str, title: str, description: str = "", tags: list =
     Returns:
         YouTube API response with video ID
     """
-    token_path = os.path.join(TOKENS_DIR, f"{user_id}.json")
-    
-    if not os.path.exists(token_path):
-        raise FileNotFoundError(f"Token not found for user {user_id}. Visit /auth/connect first to authenticate.")
-    
-    creds = Credentials.from_authorized_user_file(token_path)
+    creds = load_credentials_from_supabase(user_id)
     youtube = build("youtube", "v3", credentials=creds)
     
     if tags is None:

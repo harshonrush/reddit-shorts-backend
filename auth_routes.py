@@ -4,6 +4,7 @@ from google_auth_oauthlib.flow import Flow
 import os
 import json
 import uuid
+from db import supabase
 
 router = APIRouter()
 
@@ -103,10 +104,13 @@ def callback(code: str, state: str):
 
     creds = flow.credentials
 
-    # Save token per user
-    token_path = get_token_path(user_id)
-    with open(token_path, "w") as f:
-        f.write(creds.to_json())
+    # Save token to Supabase
+    supabase.table("user_tokens").upsert({
+        "user_id": user_id,
+        "access_token": creds.token,
+        "refresh_token": creds.refresh_token,
+        "expiry": creds.expiry.isoformat() if creds.expiry else None
+    }, on_conflict="user_id").execute()
 
     os.remove(STATE_FILE)
 
@@ -118,5 +122,5 @@ def callback(code: str, state: str):
 # 🔹 STEP 3: STATUS
 @router.get("/auth/status")
 def status(user_id: str = Query("default")):
-    token_path = get_token_path(user_id)
-    return {"connected": os.path.exists(token_path), "user_id": user_id}
+    res = supabase.table("user_tokens").select("*").eq("user_id", user_id).execute()
+    return {"connected": len(res.data) > 0, "user_id": user_id}

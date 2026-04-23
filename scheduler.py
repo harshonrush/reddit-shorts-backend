@@ -72,11 +72,25 @@ def save_settings(user_id: str, updates: dict):
     print("UPSERT RESULT:", res.data)
 
 
+def token_exists(user_id: str) -> bool:
+    """Check if user has stored YouTube token in Supabase."""
+    res = supabase.table("user_tokens") \
+        .select("*") \
+        .eq("user_id", user_id) \
+        .execute()
+    return len(res.data) > 0
+
+
 def daily_job(user_id: str):
     """Generate and upload video daily."""
     settings = load_settings(user_id)
     if not settings.get("enabled", False):
         logger.info(f"[USER:{user_id}] Auto-post disabled, skipping.")
+        return
+    
+    # Check if user has authenticated YouTube
+    if not token_exists(user_id):
+        logger.warning(f"[USER:{user_id}] No YouTube token found, skipping.")
         return
     
     # Pick topic based on user's niche

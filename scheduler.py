@@ -193,14 +193,20 @@ def daily_job(user_id: str):
                     tags=["reddit", "story", "shorts", topic],
                     user_id=user_id
                 )
+                print(f"[USER:{user_id}] UPLOAD SUCCESS: {res}")
                 break
             except Exception as e:
                 logger.error(f"[USER:{user_id}] Upload attempt {attempt + 1} failed: {e}")
+                print(f"[USER:{user_id}] UPLOAD FAILED: {str(e)}")
                 if attempt == 2:  # Last attempt
-                    raise e
+                    logger.error(f"[USER:{user_id}] All upload attempts failed")
+                    return  # Gracefully exit instead of crashing
                 time.sleep(5)  # Wait 5s before retry
-        
-        logger.info(f"[USER:{user_id}] Posted: https://youtube.com/watch?v={res['id']}")
+
+        if res:
+            logger.info(f"[USER:{user_id}] Posted: https://youtube.com/watch?v={res['id']}")
+        else:
+            logger.error(f"[USER:{user_id}] Upload returned no response")
         
     except Exception as e:
         logger.error(f"[USER:{user_id}] Error in daily_job: {e}")

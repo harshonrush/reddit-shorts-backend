@@ -272,9 +272,24 @@ def run_cron(secret: str):
 
         if diff_minutes > 10:
             continue
-        
+
+        # 🚨 RE-CHECK: Race condition protection
+        # Query fresh data right before locking
+        fresh = supabase.table("users_settings").select("is_posting,last_posted_date").eq("user_id", user_id).execute()
+        if not fresh.data:
+            continue
+        user = fresh.data[0]
+
+        if user.get("is_posting"):
+            print(f"[CRON SKIP] {user_id} already posting (race condition caught)")
+            continue
+
+        if user.get("last_posted_date") == today:
+            print(f"[CRON SKIP] {user_id} already posted today")
+            continue
+
         print(f"[CRON RUNNING] {user_id}")
-        
+
         # LOCK + MARK
         save_settings(user_id, {
             "is_posting": True

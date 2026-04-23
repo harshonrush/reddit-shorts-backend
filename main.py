@@ -219,7 +219,7 @@ async def trigger_daily_post(user_id: str = "default", secret: str = None):
 
 
 # Cron endpoint for cron-job.org (runs every 5 minutes)
-@app.post("/cron/run")
+@app.get("/cron/run")
 def run_cron(secret: str):
     """Check all users and run daily job if scheduled time matches."""
     # Security check

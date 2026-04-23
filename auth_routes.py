@@ -112,8 +112,8 @@ def callback(code: str, state: str):
 
     # Redirect back to frontend settings page with user_id
     # Use production URL (update this to your actual frontend URL)
-    FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
-    return RedirectResponse(f"{FRONTEND_URL}/settings?user_id={user_id}")
+    FRONTEND_URL = os.getenv("FRONTEND_URL", "https://reddit-shorts-frontend.vercel.app/dashboard")
+    return RedirectResponse(f"{FRONTEND_URL}")
 
 
 # 🔹 STEP 3: STATUS

@@ -45,12 +45,9 @@ def load_settings(user_id: str):
     if res.data:
         return res.data[0]
 
-    # Create default if not exists
-    supabase.table("users_settings").insert({
-        "user_id": user_id
-    }).execute()
-
-    return {
+    # CREATE ROW IF NOT EXISTS
+    default_data = {
+        "user_id": user_id,
         "enabled": False,
         "hour": 18,
         "minute": 0,
@@ -59,13 +56,20 @@ def load_settings(user_id: str):
         "is_posting": False
     }
 
+    supabase.table("users_settings").insert(default_data).execute()
+
+    return default_data
+
 
 def save_settings(user_id: str, updates: dict):
     """Save auto-post settings for a user to Supabase."""
-    supabase.table("users_settings") \
-        .update(updates) \
-        .eq("user_id", user_id) \
+    updates["user_id"] = user_id
+
+    res = supabase.table("users_settings") \
+        .upsert(updates, on_conflict="user_id") \
         .execute()
+
+    print("UPSERT RESULT:", res.data)
 
 
 def daily_job(user_id: str):
@@ -197,15 +201,18 @@ def daily_job(user_id: str):
                 pass
 
 
-def update_schedule(enabled: bool, hour: int = 18, minute: int = 0, user_id: str = "default", niche: str = None):
-    """Update schedule settings for a user."""
+def update_schedule(enabled: bool, hour: int, minute: int, user_id: str, niche: str):
     updates = {
+        "user_id": user_id,
         "enabled": enabled,
         "hour": hour,
-        "minute": minute
+        "minute": minute,
+        "niche": niche
     }
-    if niche:
-        updates["niche"] = niche
-    
-    save_settings(user_id, updates)
+
+    res = supabase.table("users_settings") \
+        .upsert(updates, on_conflict="user_id") \
+        .execute()
+
+    print("UPSERT RESULT:", res.data)
     logger.info(f"[USER:{user_id}] Settings saved - enabled={enabled} at {hour}:{minute:02d}")

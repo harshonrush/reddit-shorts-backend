@@ -267,13 +267,10 @@ def run_cron(secret: str):
             second=0,
             microsecond=0
         )
-        
-        time_diff = (now - scheduled_time).total_seconds()
-        
-        if time_diff < 0:
-            time_diff += 86400
-        
-        if not (0 <= time_diff <= 300):
+
+        diff_minutes = abs((now - scheduled_time).total_seconds()) / 60
+
+        if diff_minutes > 10:
             continue
         
         print(f"[CRON RUNNING] {user_id}")

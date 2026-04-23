@@ -17,6 +17,6 @@ google-api-python-client==2.118.0
 
 pytz==2024.1
 
-# ✅ FIXED
-supabase==2.3.4
-httpx==0.25.2
+# ✅ FIXED - supabase 2.5+ has proper httpx 0.25+ compatibility
+supabase==2.5.1
+httpx==0.27.0

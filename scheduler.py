@@ -1,7 +1,6 @@
 """Auto-posting scheduler for daily video generation and upload."""
 import random
 import os
-import json
 import logging
 import time
 
@@ -33,39 +32,47 @@ TOPICS = [
     "family secrets"
 ]
 
-# Settings directory
-SETTINGS_DIR = "settings"
-os.makedirs(SETTINGS_DIR, exist_ok=True)
+
+from db import supabase
+
+def load_settings(user_id: str):
+    """Load auto-post settings for a user from Supabase."""
+    res = supabase.table("users_settings") \
+        .select("*") \
+        .eq("user_id", user_id) \
+        .execute()
+
+    if res.data:
+        return res.data[0]
+
+    # Create default if not exists
+    supabase.table("users_settings").insert({
+        "user_id": user_id
+    }).execute()
+
+    return {
+        "enabled": False,
+        "hour": 18,
+        "minute": 0,
+        "niche": "stories",
+        "last_posted_date": None,
+        "is_posting": False
+    }
 
 
-def get_settings_path(user_id: str):
-    """Get settings file path for a user."""
-    return os.path.join(SETTINGS_DIR, f"{user_id}.json")
+def save_settings(user_id: str, updates: dict):
+    """Save auto-post settings for a user to Supabase."""
+    supabase.table("users_settings") \
+        .update(updates) \
+        .eq("user_id", user_id) \
+        .execute()
 
 
-def load_settings(user_id: str = "default"):
-    """Load auto-post settings for a user."""
-    import json
-    settings_path = get_settings_path(user_id)
-    if os.path.exists(settings_path):
-        with open(settings_path, "r") as f:
-            return json.load(f)
-    return {"enabled": False, "hour": 18, "minute": 0, "niche": "stories"}
-
-
-def save_settings(settings, user_id: str = "default"):
-    """Save auto-post settings for a user."""
-    import json
-    settings_path = get_settings_path(user_id)
-    with open(settings_path, "w") as f:
-        json.dump(settings, f)
-
-
-def daily_job(user_id: str = "default"):
+def daily_job(user_id: str):
     """Generate and upload video daily."""
     settings = load_settings(user_id)
     if not settings.get("enabled", False):
-        print(f"[SCHEDULER] Auto-post disabled for user {user_id}, skipping.")
+        logger.info(f"[USER:{user_id}] Auto-post disabled, skipping.")
         return
     
     # Pick topic based on user's niche
@@ -74,8 +81,14 @@ def daily_job(user_id: str = "default"):
         topic = random.choice(NICHE_TOPICS[niche])
     else:
         topic = random.choice(TOPICS)
-    print(f"[SCHEDULER] Niche: {niche} | Topic: {topic}")
+    print(f"[SCHEDULER] [USER:{user_id}] Niche: {niche} | Topic: {topic}")
     
+    start_time = time.time()
+    def check_timeout():
+        if time.time() - start_time > 300:
+            raise Exception("Job timeout")
+    
+    audio_path = video_path = ass_path = None
     try:
         # Import here to avoid circular imports
         from script_engine import generate_story, generate_script
@@ -93,19 +106,43 @@ def daily_job(user_id: str = "default"):
         story = generate_story(topic)
         
         # 2. Script
-        script = generate_script(story)
+        try:
+            script = generate_script(story)
+        except Exception as e:
+            if "quota" in str(e).lower():
+                logger.warning(f"[USER:{user_id}] Gemini quota hit, using fallback script")
+                script = f"This is a crazy {topic} story you won't believe..."
+            else:
+                raise
+        
         words = script.split()[:120]
         script = " ".join(words)
+        
+        check_timeout()
         
         # 3. Audio
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
             audio_path = f.name
         generate_audio(script, audio_path)
         
+        check_timeout()
+        
         # 4. Video
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
             video_path = f.name
-        fetch_video(video_path)
+            
+        try:
+            fetch_video(video_path)
+        except Exception as e:
+            logger.error(f"[USER:{user_id}] Video fetch failed: {e}. Using light video fallback.")
+            try:
+                from video_fetcher import create_blank_video
+                create_blank_video(video_path)
+            except Exception as inner_e:
+                logger.error(f"[USER:{user_id}] Fallback video creation failed: {inner_e}")
+                raise
+        
+        check_timeout()
         
         # 5. Subtitles
         with tempfile.NamedTemporaryFile(suffix=".ass", delete=False) as f:
@@ -122,14 +159,12 @@ def daily_job(user_id: str = "default"):
         if not result:
             print(f"[SCHEDULER] ❌ Render failed for user {user_id}")
             return
+            
+        check_timeout()
         
-        # 7. Cleanup temp files
-        for f in [audio_path, video_path, ass_path]:
-            if os.path.exists(f):
-                os.remove(f)
-        
+
         # 8. Upload to YouTube (with retry)
-        logger.info(f"Uploading to YouTube for user {user_id}...")
+        logger.info(f"[USER:{user_id}] Uploading to YouTube...")
         res = None
         for attempt in range(3):
             try:
@@ -142,30 +177,35 @@ def daily_job(user_id: str = "default"):
                 )
                 break
             except Exception as e:
-                logger.error(f"Upload attempt {attempt + 1} failed: {e}")
+                logger.error(f"[USER:{user_id}] Upload attempt {attempt + 1} failed: {e}")
                 if attempt == 2:  # Last attempt
                     raise e
                 time.sleep(5)  # Wait 5s before retry
         
-        logger.info(f"Posted: https://youtube.com/watch?v={res['id']}")
+        logger.info(f"[USER:{user_id}] Posted: https://youtube.com/watch?v={res['id']}")
         
     except Exception as e:
-        logger.error(f"Error in daily_job for {user_id}: {e}")
+        logger.error(f"[USER:{user_id}] Error in daily_job: {e}")
         import traceback
-        logger.error(traceback.format_exc())
+        logger.error(f"[USER:{user_id}] {traceback.format_exc()}")
+    finally:
+        for f in [audio_path, video_path, ass_path]:
+            try:
+                if f and os.path.exists(f):
+                    os.remove(f)
+            except:
+                pass
 
 
 def update_schedule(enabled: bool, hour: int = 18, minute: int = 0, user_id: str = "default", niche: str = None):
     """Update schedule settings for a user."""
-    # Load existing settings to preserve fields like last_posted_date, is_posting
-    settings = load_settings(user_id)
-    
-    # Update only the provided fields
-    settings["enabled"] = enabled
-    settings["hour"] = hour
-    settings["minute"] = minute
+    updates = {
+        "enabled": enabled,
+        "hour": hour,
+        "minute": minute
+    }
     if niche:
-        settings["niche"] = niche
+        updates["niche"] = niche
     
-    save_settings(settings, user_id)
-    print(f"[SCHEDULER] Settings saved for user {user_id} - enabled={enabled} at {hour}:{minute:02d}")
+    save_settings(user_id, updates)
+    logger.info(f"[USER:{user_id}] Settings saved - enabled={enabled} at {hour}:{minute:02d}")

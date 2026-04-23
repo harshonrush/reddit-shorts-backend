@@ -43,16 +43,16 @@ def fetch_video(output_path: str, query: str = None) -> str:
         return create_blank_video(output_path)
 
 
-def create_blank_video(output_path: str, duration: int = 60) -> str:
+def create_blank_video(output_path: str, duration: int = 5) -> str:
     """Create a blank colored video using ffmpeg as last resort."""
     import subprocess
     
     cmd = [
         "ffmpeg", "-y",
         "-f", "lavfi",
-        "-i", f"color=c=black:s=1080x1920:d={duration}",
+        "-i", f"color=c=black:s=360x640:d={duration}",
         "-f", "lavfi",
-        "-i", "anullsrc=r=44100:cl=mono",
+        "-i", "anullsrc=r=22050:cl=mono",
         "-shortest",
         "-pix_fmt", "yuv420p",
         "-c:v", "libx264",

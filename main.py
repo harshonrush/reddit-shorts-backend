@@ -33,6 +33,22 @@ app.add_middleware(
 OUTPUT_DIR = os.path.abspath(os.path.join("..", "assets", "output"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+import threading
+
+MAX_THREADS = 5
+active_threads = []
+
+def run_limited_thread(target):
+    global active_threads
+    active_threads = [t for t in active_threads if t.is_alive()]
+    if len(active_threads) >= MAX_THREADS:
+        print("⚠️ Too many active jobs, skipping")
+        return False
+    t = threading.Thread(target=target)
+    t.start()
+    active_threads.append(t)
+    return True
+
 
 class GenerateRequest(BaseModel):
     topic: str
@@ -196,23 +212,24 @@ async def trigger_daily_post(user_id: str = "default", secret: str = None):
     def run_job():
         daily_job(user_id)
     
-    thread = threading.Thread(target=run_job)
-    thread.start()
+    if not run_limited_thread(run_job):
+        return {"status": "skipped", "reason": "Too many active jobs"}
     
     return {"status": "triggered", "user_id": user_id}
 
 
 # Cron endpoint for cron-job.org (runs every 5 minutes)
-@app.get("/cron/run")
-def run_cron(secret: str = None):
+@app.post("/cron/run")
+def run_cron(secret: str):
     """Check all users and run daily job if scheduled time matches."""
     # Security check
     cron_secret = os.getenv("CRON_SECRET")
-    if cron_secret and secret != cron_secret:
+    if not secret or (cron_secret and secret != cron_secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
     
     from datetime import datetime, timedelta
-    from scheduler import daily_job, SETTINGS_DIR, load_settings, save_settings
+    from scheduler import daily_job, load_settings, save_settings
+    from db import supabase
     import threading
     
     # Convert UTC to IST for comparison (user stores time in IST)
@@ -228,66 +245,63 @@ def run_cron(secret: str = None):
     
     triggered = []
     
-    # Find all user settings files
-    if os.path.exists(SETTINGS_DIR):
-        for filename in os.listdir(SETTINGS_DIR):
-            if filename.endswith(".json"):
-                user_id = filename.replace(".json", "")
-                settings = load_settings(user_id)
-                
-                if not settings.get("enabled", False):
-                    continue
-                
-                # Get scheduled time (stored as IST)
-                scheduled_hour = settings.get("hour", 18)
-                scheduled_minute = settings.get("minute", 0)
-                
-                # Prevent duplicate posting
-                today = now.strftime("%Y-%m-%d")
-                if settings.get("last_posted_date") == today:
-                    continue
-
-                # Lock to prevent race condition
-                if settings.get("is_posting"):
-                    continue
-
-                # Time window: 0 to 300 seconds (5 min) after scheduled time
-                scheduled_time = now.replace(
-                    hour=scheduled_hour,
-                    minute=scheduled_minute,
-                    second=0,
-                    microsecond=0
-                )
-                time_diff = (now - scheduled_time).total_seconds()
-                
-                # Handle day wrap (e.g., 23:59 scheduled, 00:01 now)
-                if time_diff < 0:
-                    time_diff += 86400  # Add 24 hours
-                
-                if not (0 <= time_diff <= 300):  # 0 to 5 minutes window
-                    continue
-
-                print(f"[CRON RUNNING] {user_id} at {now.strftime('%H:%M')} (scheduled {scheduled_hour}:{scheduled_minute:02d})")
-
-                # Set lock AND mark as posted (atomically)
-                settings["is_posting"] = True
-                settings["last_posted_date"] = today
-                save_settings(settings, user_id)
-
-                def run_job(uid=user_id):
-                    from scheduler import daily_job
-                    try:
-                        daily_job(uid)
-                    finally:
-                        # Release lock only
-                        s = load_settings(uid)
-                        s["is_posting"] = False
-                        save_settings(s, uid)
-
-                thread = threading.Thread(target=run_job)
-                thread.start()
-
-                triggered.append(user_id)
+    # Query all user settings from Supabase
+    res = supabase.table("users_settings").select("*").execute()
+    
+    for settings in res.data:
+        user_id = settings["user_id"]
+        
+        if not settings.get("enabled"):
+            continue
+        
+        if settings.get("is_posting"):
+            continue
+        
+        today = now.strftime("%Y-%m-%d")
+        if settings.get("last_posted_date") == today:
+            continue
+        
+        scheduled_time = now.replace(
+            hour=settings["hour"],
+            minute=settings["minute"],
+            second=0,
+            microsecond=0
+        )
+        
+        time_diff = (now - scheduled_time).total_seconds()
+        
+        if time_diff < 0:
+            time_diff += 86400
+        
+        if not (0 <= time_diff <= 300):
+            continue
+        
+        print(f"[CRON RUNNING] {user_id}")
+        
+        # LOCK + MARK
+        save_settings(user_id, {
+            "is_posting": True
+        })
+        
+        def run_job(uid=user_id, date_str=today):
+            try:
+                daily_job(uid)
+                save_settings(uid, {
+                    "is_posting": False,
+                    "last_posted_date": date_str
+                })
+            except Exception as e:
+                print(f"[CRON ERROR] {e}")
+                save_settings(uid, {
+                    "is_posting": False
+                })
+        
+        if not run_limited_thread(run_job):
+            # Unlock if we couldn't start the thread so it retries next cron tick
+            save_settings(user_id, {"is_posting": False})
+            continue
+        
+        triggered.append(user_id)
     
     return {"status": "checked", "triggered": triggered, "time": now.isoformat()}
 

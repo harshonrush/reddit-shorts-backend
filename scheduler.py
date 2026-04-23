@@ -81,16 +81,16 @@ def token_exists(user_id: str) -> bool:
     return len(res.data) > 0
 
 
-def daily_job(user_id: str):
+def daily_job(user_id: str, token_data: dict = None):
     """Generate and upload video daily."""
     settings = load_settings(user_id)
     if not settings.get("enabled", False):
         logger.info(f"[USER:{user_id}] Auto-post disabled, skipping.")
         return
     
-    # Check if user has authenticated YouTube
-    if not token_exists(user_id):
-        logger.warning(f"[USER:{user_id}] No YouTube token found, skipping.")
+    # Check if token provided (cron passes it, manual calls may not)
+    if not token_data:
+        logger.warning(f"[USER:{user_id}] No token_data provided, skipping.")
         return
     
     # Pick topic based on user's niche

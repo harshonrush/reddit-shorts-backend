@@ -261,11 +261,12 @@ def run_cron(secret: str):
         if settings.get("last_posted_date") == today:
             continue
         
-        # Check token exists from joined data
-        token_data = settings.get("user_tokens")
-        if not token_data:
+        # Check token exists from joined data (Supabase returns as list)
+        token_list = settings.get("user_tokens")
+        if not token_list or len(token_list) == 0:
             print(f"[CRON SKIP] {user_id} no YouTube token")
             continue
+        token_data = token_list[0]  # Extract first token from list
         
         scheduled_time = now.replace(
             hour=settings["hour"],
@@ -310,9 +311,9 @@ def run_cron(secret: str):
 
         print(f"[CRON RUNNING] {user_id} (lock acquired)")
         
-        def run_job(uid=user_id, date_str=today):
+        def run_job(uid=user_id, tok=token_data, date_str=today):
             try:
-                daily_job(uid)
+                daily_job(uid, tok)  # Pass pre-fetched token
                 save_settings(uid, {
                     "is_posting": False,
                     "last_posted_date": date_str

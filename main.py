@@ -15,7 +15,7 @@ from subtitle_ass import generate_ass
 from renderer import render_video
 from uploader import upload_video
 from auth_routes import router as auth_router
-from scheduler import start as start_scheduler, update_schedule, load_settings
+from scheduler import update_schedule, load_settings
 
 app = FastAPI(title="Reddit Reels API")
 

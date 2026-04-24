@@ -16,7 +16,7 @@ from renderer import render_video
 from uploader import upload_video
 from auth_routes import router as auth_router
 from scheduler import update_schedule, load_settings, save_settings, daily_job
-from queue import video_queue
+from redis_queue import video_queue
 from rq import Retry
 
 app = FastAPI(title="Reddit Reels API")

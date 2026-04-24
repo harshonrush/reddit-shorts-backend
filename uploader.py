@@ -1,30 +1,32 @@
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from datetime import datetime, timedelta
 import os
-import requests
 from db import supabase
 
 
 def refresh_token_if_needed(creds: Credentials, user_id: str) -> Credentials:
     """Refresh access token if expired or about to expire."""
-    if not creds.expiry:
+    if not creds:
         return creds
 
     # Refresh if expired or expiring in < 5 minutes
-    if datetime.utcnow() >= (creds.expiry - timedelta(minutes=5)):
+    if creds.expired or (creds.expiry and datetime.utcnow() >= (creds.expiry - timedelta(minutes=5))):
+        if not creds.refresh_token:
+            print("[TOKEN] No refresh token available")
+            return creds
+
         print("[TOKEN] Refreshing access token...")
-        
-        from google.auth.transport.requests import Request
         creds.refresh(Request())
-        
+
         # Update DB with new token
         supabase.table("user_tokens").update({
             "access_token": creds.token,
             "expiry": creds.expiry.isoformat() if creds.expiry else None
         }).eq("user_id", user_id).execute()
-        
+
         print("[TOKEN] Token refreshed and saved to DB")
 
     return creds
@@ -55,7 +57,6 @@ def load_credentials_from_supabase(user_id: str) -> Credentials:
     
     # Refresh if expiring in < 5 minutes
     if expiry and (expiry - timedelta(minutes=5)) < datetime.utcnow():
-        from google.auth.transport.requests import Request
         creds.refresh(Request())
         
         # Update Supabase with new tokens
@@ -86,6 +87,11 @@ def upload_video(file_path: str, title: str, description: str = "", tags: list =
     print("[UPLOADER] STEP 1: Loading credentials...")
     if token_data:
         # Use pre-fetched token (saves DB query)
+        # Convert expiry string to datetime if needed
+        expiry = token_data.get("expiry")
+        if isinstance(expiry, str):
+            expiry = datetime.fromisoformat(expiry)
+
         creds = Credentials(
             token=token_data["access_token"],
             refresh_token=token_data.get("refresh_token"),
@@ -93,7 +99,7 @@ def upload_video(file_path: str, title: str, description: str = "", tags: list =
             client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
             client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
             scopes=["https://www.googleapis.com/auth/youtube.upload"],
-            expiry=token_data.get("expiry")
+            expiry=expiry
         )
         # Refresh if needed
         creds = refresh_token_if_needed(creds, user_id)

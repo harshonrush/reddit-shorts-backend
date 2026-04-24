@@ -254,12 +254,28 @@ def run_cron(secret: str):
         if settings.get("last_posted_date") == today:
             continue
         
-        # Check token exists from joined data (Supabase returns as list)
-        token_list = settings.get("user_tokens")
-        if not token_list or len(token_list) == 0:
-            print(f"[CRON SKIP] {user_id} no YouTube token")
+        # Check token exists from joined data (bulletproof handling)
+        token_data = settings.get("user_tokens")
+
+        # Case 1: None
+        if not token_data:
+            print(f"[CRON SKIP] {user_id} no token")
             continue
-        token_data = token_list[0]  # Extract first token from list
+
+        # Case 2: list (Supabase returns relations as list)
+        if isinstance(token_data, list):
+            if len(token_data) == 0:
+                print(f"[CRON SKIP] {user_id} empty token list")
+                continue
+            token_data = token_data[0]
+
+        # Case 3: dict → already usable
+        elif isinstance(token_data, dict):
+            pass
+
+        else:
+            print(f"[CRON SKIP] {user_id} invalid token format")
+            continue
         
         scheduled_time = now.replace(
             hour=settings["hour"],

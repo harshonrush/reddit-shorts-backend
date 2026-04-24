@@ -45,8 +45,8 @@ def load_credentials_from_supabase(user_id: str) -> Credentials:
     return creds
 
 
-def upload_video(file_path: str, title: str, description: str = "", tags: list = None, user_id: str = "default") -> dict:
-    """Upload video to YouTube using OAuth token from Supabase.
+def upload_video(file_path: str, title: str, description: str = "", tags: list = None, user_id: str = "default", token_data: dict = None) -> dict:
+    """Upload video to YouTube using OAuth token.
     
     Args:
         file_path: Path to video file
@@ -54,12 +54,28 @@ def upload_video(file_path: str, title: str, description: str = "", tags: list =
         description: Video description
         tags: List of tags (optional)
         user_id: User identifier for token lookup
+        token_data: Pre-fetched token data (optional, saves DB query)
         
     Returns:
         YouTube API response with video ID
     """
     print("[UPLOADER] STEP 1: Loading credentials...")
-    creds = load_credentials_from_supabase(user_id)
+    if token_data:
+        # Use pre-fetched token (saves DB query)
+        creds = Credentials(
+            token=token_data["access_token"],
+            refresh_token=token_data.get("refresh_token"),
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
+            client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
+            scopes=["https://www.googleapis.com/auth/youtube.upload"],
+            expiry=token_data.get("expiry")
+        )
+        # Refresh if needed
+        creds = refresh_token_if_needed(creds, user_id)
+    else:
+        # Fallback: fetch from DB
+        creds = load_credentials_from_supabase(user_id)
 
     print("[UPLOADER] STEP 2: Building YouTube API client...")
     youtube = build("youtube", "v3", credentials=creds)

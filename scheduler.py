@@ -191,7 +191,8 @@ def daily_job(user_id: str, token_data: dict = None):
                     title=f"Crazy {topic.title()} Story",
                     description=f"#{topic.replace(' ', '')} #shorts #reddit #storytime",
                     tags=["reddit", "story", "shorts", topic],
-                    user_id=user_id
+                    user_id=user_id,
+                    token_data=token_data
                 )
                 print(f"[USER:{user_id}] UPLOAD SUCCESS: {res}")
                 break
@@ -200,7 +201,11 @@ def daily_job(user_id: str, token_data: dict = None):
                 print(f"[USER:{user_id}] UPLOAD FAILED: {str(e)}")
                 if attempt == 2:  # Last attempt
                     logger.error(f"[USER:{user_id}] All upload attempts failed")
-                    return  # Gracefully exit instead of crashing
+                    
+                    # 🔥 IMPORTANT: UNLOCK USER (prevent stuck state)
+                    save_settings(user_id, {"is_posting": False, "last_error": "Upload failed after 3 attempts"})
+                    
+                    return
                 time.sleep(5)  # Wait 5s before retry
 
         if res:
@@ -223,6 +228,12 @@ def daily_job(user_id: str, token_data: dict = None):
         # Unlock on failure (will retry on next cron tick)
         save_settings(user_id, {"is_posting": False})
     finally:
+        try:
+            # 🔥 FAIL-SAFE: Ensure user is never stuck in is_posting=True state
+            save_settings(user_id, {"is_posting": False})
+        except:
+            pass
+
         for f in [audio_path, video_path, ass_path]:
             try:
                 if f and os.path.exists(f):

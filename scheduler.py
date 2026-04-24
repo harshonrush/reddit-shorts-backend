@@ -210,15 +210,14 @@ def daily_job(user_id: str, token_data: dict = None):
 
         if res:
             logger.info(f"[USER:{user_id}] Posted: https://youtube.com/watch?v={res['id']}")
-            # Mark complete: unlock and set last_posted_date
-            from datetime import datetime
+            # Mark complete: unlock and clear error (last_posted_date already set by cron)
             save_settings(user_id, {
                 "is_posting": False,
-                "last_posted_date": datetime.utcnow().strftime("%Y-%m-%d")
+                "last_error": None
             })
         else:
             logger.error(f"[USER:{user_id}] Upload returned no response")
-            # Unlock without marking date (will retry)
+            # Unlock (last_posted_date already set, won't retry today)
             save_settings(user_id, {"is_posting": False})
         
     except Exception as e:
@@ -226,11 +225,10 @@ def daily_job(user_id: str, token_data: dict = None):
         import traceback
         logger.error(f"[USER:{user_id}] {traceback.format_exc()}")
         
-        # 🔥 STOP INFINITE RETRIES: Disable auto-post on failure
+        # Unlock and record error (last_posted_date already set, won't retry today)
         save_settings(user_id, {
             "is_posting": False,
-            "last_error": str(e)[:200],
-            "enabled": False
+            "last_error": str(e)[:200]
         })
     finally:
         try:

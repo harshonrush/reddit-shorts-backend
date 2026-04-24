@@ -58,15 +58,17 @@ def generate_story(topic: str) -> str:
         return f"I never thought {topic} would change everything. But it did."
     
     try:
-        prompt = f"""Write an emotional, engaging Reddit-style story about {topic}. 
+        prompt = f"""Write an emotional, engaging Reddit-style story about {topic}.
 Make it sound authentic and viral-worthy.
 - Strong emotional hook in the opening
 - Relatable situation with clear emotional arc
 - Natural, conversational language
 - Around 100-150 words total
 - No titles or formatting, just the story"""
-        
+
+        print(f"[GEMINI] CALLING GEMINI for topic: {topic}...")
         response = model.generate_content(prompt)
+        print(f"[GEMINI] Response received, length: {len(response.text.strip())} chars")
         return response.text.strip()
     except Exception as e:
         if "429" in str(e) or "quota" in str(e).lower() or "RESOURCE_EXHAUSTED" in str(e):
@@ -114,8 +116,10 @@ Example tone:
 "I trusted him... worst mistake"
 
 Now generate:"""
-        
+
+        print(f"[GEMINI] CALLING GEMINI for script generation...")
         response = model.generate_content(prompt)
+        print(f"[GEMINI] Script response received, cleaning...")
         return clean_script(response.text)
     except Exception as e:
         if "429" in str(e) or "quota" in str(e).lower() or "RESOURCE_EXHAUSTED" in str(e):

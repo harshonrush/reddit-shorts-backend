@@ -16,7 +16,7 @@ from renderer import render_video
 from uploader import upload_video
 from auth_routes import router as auth_router
 from scheduler import update_schedule, load_settings, save_settings, daily_job
-from redis_queue import video_queue
+from redis_queue import video_queue, redis_conn
 from rq import Retry
 
 app = FastAPI(title="Reddit Reels API")
@@ -277,48 +277,33 @@ def run_cron(secret: str):
             print(f"[CRON SKIP] {user_id} invalid token format")
             continue
         
-        scheduled_time = now.replace(
-            hour=settings["hour"],
-            minute=settings["minute"],
-            second=0,
-            microsecond=0
-        )
-
-        diff_minutes = abs((now - scheduled_time).total_seconds()) / 60
-
-        if diff_minutes > 10:
+        # Exact time match (cron runs every 5 min, check if it's the exact minute)
+        if now.hour != settings["hour"] or now.minute != settings["minute"]:
             continue
-
-        # 🚨 ATOMIC LOCK: Only one process wins
-        # Try to set is_posting=True ONLY if:
-        # 1. is_posting = False (not already running)
-        # 2. last_posted_date IS NULL OR last_posted_date != today (not posted today)
-        # We need an OR condition - try NULL first, if fails try not-today
-        lock_res = None
         
-        # Try: is_posting=False AND last_posted_date IS NULL
+        print(f"[CRON MATCH] {user_id} at {now.hour}:{now.minute:02d}")
+
+        # 🚨 ATOMIC LOCK: Set is_posting=True AND last_posted_date=today (prevents retries same day)
         lock_res = supabase.table("users_settings") \
-            .update({"is_posting": True}) \
+            .update({"is_posting": True, "last_posted_date": today}) \
             .eq("user_id", user_id) \
             .eq("is_posting", False) \
-            .is_("last_posted_date", None) \
             .execute()
         
-        # If NULL failed, try: is_posting=False AND last_posted_date != today
+        # If no rows updated, lock failed (already posting)
         if not lock_res.data:
-            lock_res = supabase.table("users_settings") \
-                .update({"is_posting": True}) \
-                .eq("user_id", user_id) \
-                .eq("is_posting", False) \
-                .neq("last_posted_date", today) \
-                .execute()
-        
-        # If no rows updated, lock failed (someone else got it or posted today)
-        if not lock_res.data:
-            print(f"[CRON SKIP] {user_id} lock failed (already posting or posted today)")
+            print(f"[CRON SKIP] {user_id} lock failed (already posting)")
             continue
 
         print(f"[CRON RUNNING] {user_id} (lock acquired, enqueueing job)")
+        
+        # 🔥 REDIS LOCK: Prevent duplicate enqueuing (24h expiry)
+        lock_key = f"lock:{user_id}:{today}"
+        if redis_conn.get(lock_key):
+            print(f"[CRON SKIP] {user_id} Redis lock exists (job already enqueued or running)")
+            continue
+        
+        redis_conn.set(lock_key, 1, ex=86400)
         
         # Enqueue to Redis worker with retries (pass pre-fetched token)
         video_queue.enqueue(

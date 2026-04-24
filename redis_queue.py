@@ -1,4 +1,4 @@
-# queue.py
+# redis_queue.py - Redis Queue configuration
 import os
 import redis
 from rq import Queue

@@ -88,7 +88,7 @@ def daily_job(user_id: str, token_data: dict = None):
         logger.info(f"[USER:{user_id}] Auto-post disabled, skipping.")
         return
     
-    # Check if token provided (cron passes it, manual calls may not)
+    # Check if token provided (cron passes it, manual/trigger may not)
     if not token_data:
         logger.warning(f"[USER:{user_id}] No token_data provided, skipping.")
         return
@@ -205,13 +205,23 @@ def daily_job(user_id: str, token_data: dict = None):
 
         if res:
             logger.info(f"[USER:{user_id}] Posted: https://youtube.com/watch?v={res['id']}")
+            # Mark complete: unlock and set last_posted_date
+            from datetime import datetime
+            save_settings(user_id, {
+                "is_posting": False,
+                "last_posted_date": datetime.utcnow().strftime("%Y-%m-%d")
+            })
         else:
             logger.error(f"[USER:{user_id}] Upload returned no response")
+            # Unlock without marking date (will retry)
+            save_settings(user_id, {"is_posting": False})
         
     except Exception as e:
         logger.error(f"[USER:{user_id}] Error in daily_job: {e}")
         import traceback
         logger.error(f"[USER:{user_id}] {traceback.format_exc()}")
+        # Unlock on failure (will retry on next cron tick)
+        save_settings(user_id, {"is_posting": False})
     finally:
         for f in [audio_path, video_path, ass_path]:
             try:

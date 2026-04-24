@@ -15,7 +15,9 @@ from subtitle_ass import generate_ass
 from renderer import render_video
 from uploader import upload_video
 from auth_routes import router as auth_router
-from scheduler import update_schedule, load_settings
+from scheduler import update_schedule, load_settings, save_settings, daily_job
+from queue import video_queue
+from rq import Retry
 
 app = FastAPI(title="Reddit Reels API")
 
@@ -33,21 +35,7 @@ app.add_middleware(
 OUTPUT_DIR = os.path.abspath(os.path.join("..", "assets", "output"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-import threading
-
-MAX_THREADS = 5
-active_threads = []
-
-def run_limited_thread(target):
-    global active_threads
-    active_threads = [t for t in active_threads if t.is_alive()]
-    if len(active_threads) >= MAX_THREADS:
-        print("⚠️ Too many active jobs, skipping")
-        return False
-    t = threading.Thread(target=target)
-    t.start()
-    active_threads.append(t)
-    return True
+# Redis Queue handles concurrency - no threading needed
 
 
 class GenerateRequest(BaseModel):
@@ -205,15 +193,20 @@ async def trigger_daily_post(user_id: str = "default", secret: str = None):
     if not settings.get("enabled", False):
         return {"status": "skipped", "reason": "Auto-post disabled for this user"}
     
-    # Run the job
-    from scheduler import daily_job
-    import threading
+    # Fetch token for this user
+    token_res = supabase.table("user_tokens").select("*").eq("user_id", user_id).execute()
+    if not token_res.data:
+        return {"status": "skipped", "reason": "No YouTube token found"}
+    token_data = token_res.data[0]
     
-    def run_job():
-        daily_job(user_id)
-    
-    if not run_limited_thread(run_job):
-        return {"status": "skipped", "reason": "Too many active jobs"}
+    # Enqueue to Redis worker
+    video_queue.enqueue(
+        daily_job,
+        user_id,
+        token_data,
+        retry=Retry(max=3, interval=[10, 30, 60]),
+        job_timeout=600
+    )
     
     return {"status": "triggered", "user_id": user_id}
 
@@ -309,25 +302,16 @@ def run_cron(secret: str):
             print(f"[CRON SKIP] {user_id} lock failed (already posting or posted today)")
             continue
 
-        print(f"[CRON RUNNING] {user_id} (lock acquired)")
+        print(f"[CRON RUNNING] {user_id} (lock acquired, enqueueing job)")
         
-        def run_job(uid=user_id, tok=token_data, date_str=today):
-            try:
-                daily_job(uid, tok)  # Pass pre-fetched token
-                save_settings(uid, {
-                    "is_posting": False,
-                    "last_posted_date": date_str
-                })
-            except Exception as e:
-                print(f"[CRON ERROR] {e}")
-                save_settings(uid, {
-                    "is_posting": False
-                })
-        
-        if not run_limited_thread(run_job):
-            # Unlock if we couldn't start the thread so it retries next cron tick
-            save_settings(user_id, {"is_posting": False})
-            continue
+        # Enqueue to Redis worker with retries (pass pre-fetched token)
+        video_queue.enqueue(
+            daily_job,
+            user_id,
+            token_data,
+            retry=Retry(max=3, interval=[10, 30, 60]),
+            job_timeout=600
+        )
         
         triggered.append(user_id)
     

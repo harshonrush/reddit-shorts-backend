@@ -225,8 +225,13 @@ def daily_job(user_id: str, token_data: dict = None):
         logger.error(f"[USER:{user_id}] Error in daily_job: {e}")
         import traceback
         logger.error(f"[USER:{user_id}] {traceback.format_exc()}")
-        # Unlock on failure (will retry on next cron tick)
-        save_settings(user_id, {"is_posting": False})
+        
+        # 🔥 STOP INFINITE RETRIES: Disable auto-post on failure
+        save_settings(user_id, {
+            "is_posting": False,
+            "last_error": str(e)[:200],
+            "enabled": False
+        })
     finally:
         try:
             # 🔥 FAIL-SAFE: Ensure user is never stuck in is_posting=True state

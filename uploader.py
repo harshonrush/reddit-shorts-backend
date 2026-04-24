@@ -3,7 +3,31 @@ from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
 from datetime import datetime, timedelta
 import os
+import requests
 from db import supabase
+
+
+def refresh_token_if_needed(creds: Credentials, user_id: str) -> Credentials:
+    """Refresh access token if expired or about to expire."""
+    if not creds.expiry:
+        return creds
+
+    # Refresh if expired or expiring in < 5 minutes
+    if datetime.utcnow() >= (creds.expiry - timedelta(minutes=5)):
+        print("[TOKEN] Refreshing access token...")
+        
+        from google.auth.transport.requests import Request
+        creds.refresh(Request())
+        
+        # Update DB with new token
+        supabase.table("user_tokens").update({
+            "access_token": creds.token,
+            "expiry": creds.expiry.isoformat() if creds.expiry else None
+        }).eq("user_id", user_id).execute()
+        
+        print("[TOKEN] Token refreshed and saved to DB")
+
+    return creds
 
 
 def load_credentials_from_supabase(user_id: str) -> Credentials:

@@ -37,6 +37,10 @@ from db import supabase
 
 def load_settings(user_id: str):
     """Load auto-post settings for a user from Supabase."""
+    if supabase is None:
+        print(f"[DB] CRITICAL: Supabase client is None in load_settings for {user_id}")
+        raise Exception("Supabase not initialized - check env vars")
+
     res = supabase.table("users_settings") \
         .select("*") \
         .eq("user_id", user_id) \
@@ -63,13 +67,29 @@ def load_settings(user_id: str):
 
 def save_settings(user_id: str, updates: dict):
     """Save auto-post settings for a user to Supabase."""
-    updates["user_id"] = user_id
+    if supabase is None:
+        print(f"[DB] CRITICAL: Supabase client is None, cannot save settings for {user_id}")
+        print(f"[DB] Attempted updates: {updates}")
+        raise Exception("Supabase not initialized - check env vars")
 
-    res = supabase.table("users_settings") \
-        .upsert(updates, on_conflict="user_id") \
-        .execute()
+    try:
+        # Use UPDATE instead of UPSERT for existing records
+        res = supabase.table("users_settings") \
+            .update(updates) \
+            .eq("user_id", user_id) \
+            .execute()
 
-    print("UPSERT RESULT:", res.data)
+        if res.data:
+            print(f"[DB] Updated settings for {user_id}: {list(updates.keys())}")
+        else:
+            print(f"[DB] WARNING: No rows updated for {user_id}")
+            # Try insert as fallback
+            updates["user_id"] = user_id
+            res = supabase.table("users_settings").insert(updates).execute()
+            print(f"[DB] Inserted new settings for {user_id}")
+    except Exception as e:
+        print(f"[DB] ERROR saving settings for {user_id}: {e}")
+        raise
 
 
 def token_exists(user_id: str) -> bool:
@@ -83,14 +103,20 @@ def token_exists(user_id: str) -> bool:
 
 def daily_job(user_id: str, token_data: dict = None):
     """Generate and upload video daily."""
+    print(f"[WORKER] daily_job STARTED for user {user_id}")
+
     settings = load_settings(user_id)
     if not settings.get("enabled", False):
         logger.info(f"[USER:{user_id}] Auto-post disabled, skipping.")
+        print(f"[WORKER] daily_job SKIPPED (disabled) for {user_id}")
         return
-    
+
     # Check if token provided (cron passes it, manual/trigger may not)
     if not token_data:
         logger.warning(f"[USER:{user_id}] No token_data provided, skipping.")
+        print(f"[WORKER] daily_job SKIPPED (no token) for {user_id}")
+        # Unlock user since we can't proceed
+        save_settings(user_id, {"is_posting": False, "last_error": "No token provided"})
         return
     
     # Pick topic based on user's niche
@@ -220,11 +246,13 @@ def daily_job(user_id: str, token_data: dict = None):
             "last_error": str(e)[:200]
         })
     finally:
+        print(f"[WORKER] daily_job ENDED for {user_id}")
         try:
             # 🔥 FAIL-SAFE: Ensure user is never stuck in is_posting=True state
             save_settings(user_id, {"is_posting": False})
-        except:
-            pass
+            print(f"[WORKER] daily_job FAIL-SAFE unlock executed for {user_id}")
+        except Exception as unlock_err:
+            print(f"[WORKER] daily_job FAIL-SAFE unlock FAILED for {user_id}: {unlock_err}")
 
         for f in [audio_path, video_path, ass_path]:
             try:

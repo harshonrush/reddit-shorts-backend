@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
-from script_engine import generate_story, generate_script
+from script_engine import generate_script
 from tts import generate_audio
 from video_fetcher import fetch_video
 from subtitle_ass import generate_ass
@@ -18,6 +18,7 @@ from auth_routes import router as auth_router
 from scheduler import update_schedule, load_settings, save_settings, daily_job
 from redis_queue import video_queue, redis_conn
 from rq import Retry
+from db import supabase
 
 app = FastAPI(title="Reddit Reels API")
 
@@ -55,39 +56,41 @@ def safe_filename(text):
 
 @app.post("/generate")
 async def generate_video(request: GenerateRequest):
+    # Rate limiting: 1 request per 60 seconds per user
+    cooldown_key = f"cooldown:{request.user_id}"
+    if redis_conn.get(cooldown_key):
+        raise HTTPException(status_code=429, detail="Rate limit: Wait 60 seconds before next request")
+    redis_conn.set(cooldown_key, 1, ex=60)
+
     audio_path = video_path = ass_path = None
 
     try:
-        # 1. Story
-        story = generate_story(request.topic)
+        # 1. Generate script (single API call)
+        script = generate_script(request.topic)
 
-        # 2. Script
-        script = generate_script(story)
-        script = " ".join(script.split()[:120])
-
-        # 3. Audio
+        # 2. Audio
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
             audio_path = f.name
         generate_audio(script, audio_path)
 
-        # 4. Background video
+        # 3. Background video
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
             video_path = f.name
         fetch_video(video_path)
 
-        # 5. Subtitles
+        # 4. Subtitles
         with tempfile.NamedTemporaryFile(suffix=".ass", delete=False) as f:
             ass_path = f.name
         generate_ass(script, audio_path, ass_path)
 
-        # 6. Per-user output
+        # 5. Per-user output
         user_output_dir = os.path.join(OUTPUT_DIR, request.user_id)
         os.makedirs(user_output_dir, exist_ok=True)
 
         filename = f"reel_{safe_filename(request.topic)}.mp4"
         output_path = os.path.join(user_output_dir, filename)
 
-        # 7. Render
+        # 6. Render
         render_video(audio_path, video_path, ass_path, output_path, max_duration=90)
 
         return FileResponse(output_path, media_type="video/mp4", filename=filename)
@@ -222,8 +225,6 @@ def run_cron(secret: str):
     
     from datetime import datetime, timedelta
     from scheduler import daily_job, load_settings, save_settings
-    from db import supabase
-    import threading
     
     # Convert UTC to IST for comparison (user stores time in IST)
     try:
@@ -278,22 +279,28 @@ def run_cron(secret: str):
             continue
         
         # 5-minute window match (cron runs every 5 min, check if within window)
+        from datetime import timedelta
         scheduled_time = now.replace(
             hour=settings["hour"],
             minute=settings["minute"],
             second=0,
             microsecond=0
         )
-        diff_seconds = abs((now - scheduled_time).total_seconds())
+
+        # If scheduled time is in future, check previous day
+        if scheduled_time > now:
+            scheduled_time -= timedelta(days=1)
+
+        diff_seconds = (now - scheduled_time).total_seconds()
 
         if diff_seconds > 300:  # 5 minute window
             continue
 
         print(f"[CRON MATCH] {user_id} at {now.hour}:{now.minute:02d} (diff: {int(diff_seconds)}s)")
 
-        # 🚨 ATOMIC LOCK: Set is_posting=True AND last_posted_date=today (prevents retries same day)
+        # 🚨 ATOMIC LOCK: Set is_posting=True (last_posted_date set by worker on success)
         lock_res = supabase.table("users_settings") \
-            .update({"is_posting": True, "last_posted_date": today}) \
+            .update({"is_posting": True}) \
             .eq("user_id", user_id) \
             .eq("is_posting", False) \
             .execute()
@@ -313,17 +320,14 @@ def run_cron(secret: str):
         
         redis_conn.set(lock_key, 1, ex=86400)
         
-        # 🚨 EXTRA SAFETY: Verify our lock is still active (no race condition)
-        fresh_check = supabase.table("users_settings").select("is_posting,last_posted_date").eq("user_id", user_id).execute()
+        # 🚨 EXTRA SAFETY: Verify our lock is still active (is_posting should be True)
+        fresh_check = supabase.table("users_settings").select("is_posting").eq("user_id", user_id).execute()
         if fresh_check.data:
             check = fresh_check.data[0]
             # If is_posting is not True, another process modified it (race condition)
             if not check.get("is_posting"):
                 print(f"[CRON SKIP] {user_id} lock lost (race condition)")
                 continue
-            # If last_posted_date != today, something is wrong (we just set it)
-            if check.get("last_posted_date") != today:
-                print(f"[CRON WARN] {user_id} last_posted_date mismatch, but proceeding")
         
         # Enqueue to Redis worker with retries (pass pre-fetched token)
         video_queue.enqueue(

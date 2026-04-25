@@ -109,7 +109,6 @@ def daily_job(user_id: str, token_data: dict = None):
     audio_path = video_path = ass_path = None
     try:
         # Import here to avoid circular imports
-        from script_engine import generate_story, generate_script
         from tts import generate_audio
         from video_fetcher import fetch_video
         from subtitle_ass import generate_ass
@@ -120,32 +119,20 @@ def daily_job(user_id: str, token_data: dict = None):
         OUTPUT_DIR = os.path.abspath(os.path.join("..", "assets", "output"))
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         
-        # 1. Story
-        story = generate_story(topic)
-        
-        # 2. Script
-        try:
-            script = generate_script(story)
-        except Exception as e:
-            if "quota" in str(e).lower():
-                logger.warning(f"[USER:{user_id}] Gemini quota hit, using fallback script")
-                script = f"This is a crazy {topic} story you won't believe..."
-            else:
-                raise
-        
-        words = script.split()[:120]
-        script = " ".join(words)
-        
+        # 1. Generate script directly from topic (single API call)
+        from script_engine import generate_script
+        script = generate_script(topic)
+
         check_timeout()
-        
-        # 3. Audio
+
+        # 2. Audio
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
             audio_path = f.name
         generate_audio(script, audio_path)
         
         check_timeout()
-        
-        # 4. Video
+
+        # 3. Video
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
             video_path = f.name
             
@@ -162,12 +149,12 @@ def daily_job(user_id: str, token_data: dict = None):
         
         check_timeout()
         
-        # 5. Subtitles
+        # 4. Subtitles
         with tempfile.NamedTemporaryFile(suffix=".ass", delete=False) as f:
             ass_path = f.name
         generate_ass(script, audio_path, ass_path)
         
-        # 6. Render (per-user folder)
+        # 5. Render (per-user folder)
         user_output_dir = os.path.join(OUTPUT_DIR, user_id)
         os.makedirs(user_output_dir, exist_ok=True)
         filename = f"auto_reel_{topic.replace(' ', '_')}.mp4"
@@ -181,7 +168,7 @@ def daily_job(user_id: str, token_data: dict = None):
         check_timeout()
         
 
-        # 8. Upload to YouTube (with retry)
+        # 6. Upload to YouTube (with retry)
         logger.info(f"[USER:{user_id}] Uploading to YouTube...")
         res = None
         for attempt in range(3):
@@ -210,14 +197,16 @@ def daily_job(user_id: str, token_data: dict = None):
 
         if res:
             logger.info(f"[USER:{user_id}] Posted: https://youtube.com/watch?v={res['id']}")
-            # Mark complete: unlock and clear error (last_posted_date already set by cron)
+            # Mark complete: unlock, set last_posted_date, clear error
+            from datetime import datetime
             save_settings(user_id, {
                 "is_posting": False,
+                "last_posted_date": datetime.utcnow().strftime("%Y-%m-%d"),
                 "last_error": None
             })
         else:
             logger.error(f"[USER:{user_id}] Upload returned no response")
-            # Unlock (last_posted_date already set, won't retry today)
+            # Unlock only (no last_posted_date, allows retry on next cron tick)
             save_settings(user_id, {"is_posting": False})
         
     except Exception as e:
@@ -225,7 +214,7 @@ def daily_job(user_id: str, token_data: dict = None):
         import traceback
         logger.error(f"[USER:{user_id}] {traceback.format_exc()}")
         
-        # Unlock and record error (last_posted_date already set, won't retry today)
+        # Unlock and record error (no last_posted_date, allows retry)
         save_settings(user_id, {
             "is_posting": False,
             "last_error": str(e)[:200]

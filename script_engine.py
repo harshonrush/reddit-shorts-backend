@@ -15,135 +15,95 @@ model = genai.GenerativeModel("gemini-3-flash-preview")
 
 MAX_SCRIPT_WORDS = 120
 
-# Fallback templates when quota exceeded
-FALLBACK_TEMPLATES = [
-    """I never saw this coming...
-It started as a normal day
-Then everything changed
-Now I can't go back
-This is what happened""",
-    """They said it was impossible
-But I proved them wrong
-Against all odds
-I made it happen
-Here's the truth""",
-    """I wish I knew this sooner
-Would have saved me years
-The secret nobody talks about
-Until now
-Listen carefully""",
-    """My biggest mistake
-Cost me everything
-Don't let this happen to you
-Learn from my error
-This changed my life""",
-    """Nobody believed me
-When I told them
-Now they see the proof
-Right before their eyes
-I was right all along""",
-]
-
-FALLBACK_TOPICS = [
-    "betrayal", "unexpected success", "hidden truth", "second chance",
-    "toxic friend", "secret wealth", "career change", "family secret",
-    "wrong accusation", "miracle recovery"
-]
+# Bad prefixes for cleaning (case-insensitive)
+BAD_PREFIXES = ("here", "this", "note", "format", "example", "sure", "okay")
 
 
-def generate_story(topic: str) -> str:
-    """Generate viral Reddit-style story with strong hook."""
-    if not GEMINI_API_KEY:
-        print(f"[GEMINI] SKIP: No API key configured, using fallback for {topic}")
-        return f"I never thought {topic} would change everything. But it did."
-
-    try:
-        prompt = f"""Write an emotional, engaging Reddit-style story about {topic}.
-Make it sound authentic and viral-worthy.
-- Strong emotional hook in the opening
-- Relatable situation with clear emotional arc
-- Natural, conversational language
-- Around 100-150 words total
-- No titles or formatting, just the story"""
-
-        print(f"[GEMINI] CALLING GEMINI for topic: {topic}...")
-        response = model.generate_content(prompt)
-        print(f"[GEMINI] Response received, length: {len(response.text.strip())} chars")
-        return response.text.strip()
-    except Exception as e:
-        error_str = str(e)
-        print(f"[GEMINI] ERROR: {error_str}")
-        if "429" in error_str or "quota" in error_str.lower() or "RESOURCE_EXHAUSTED" in error_str:
-            print(f"[SCRIPT] Gemini quota exceeded, using fallback story for: {topic}")
-            return f"I never expected {topic} to affect me like this. What I discovered changed everything I thought I knew."
-        print(f"[SCRIPT] Gemini error, using fallback: {error_str[:100]}")
-        return f"I never expected {topic} to affect me like this. What I discovered changed everything I thought I knew."
+def generate_fallback_script(topic: str) -> str:
+    """Generate viral fallback script when Gemini fails."""
+    return f"""I wish I never ignored this...
+It started with {topic}
+Everything felt normal
+Until one small thing changed
+And I couldn't stop it anymore
+Now I regret everything"""
 
 
-def generate_script(topic_or_story: str) -> str:
-    """Generate viral short-form video script.
-    
-    Args:
-        topic_or_story: Topic or pre-generated story
-        
-    Returns:
-        Clean viral script with hook, story, retention
-    """
-    if not GEMINI_API_KEY:
-        print(f"[GEMINI] SKIP: No API key, using fallback template")
-        return random.choice(FALLBACK_TEMPLATES)
+def trim_to_word_limit(text: str, max_words: int = 120) -> str:
+    """Trim text to max word limit."""
+    words = text.split()
+    if len(words) > max_words:
+        print(f"[SCRIPT] Trimming from {len(words)} to {max_words} words")
+        return " ".join(words[:max_words])
+    return text
 
-    try:
-        prompt = f"""You are writing a VIRAL short-form video script for reels.
 
-Topic: {topic_or_story}
-
-RULES:
-- Max 120 words
-- Start with a strong HOOK in first line
-- Format like a conversation / story
-- Emotional, dramatic, relatable
-- Use short sentences
-- Add suspense and curiosity
-- Each line should feel like caption text
-- No long paragraphs
-- No explanations
-
-FORMAT:
-Line 1: Hook
-Then story unfolds line by line
-
-Example tone:
-"I wasn't supposed to see this..."
-"My mom called me at 2AM..."
-"I trusted him... worst mistake"
-
-Now generate:"""
-
-        print(f"[GEMINI] CALLING GEMINI for script generation...")
-        response = model.generate_content(prompt)
-        print(f"[GEMINI] Script response received, cleaning...")
-        return clean_script(response.text)
-    except Exception as e:
-        error_str = str(e)
-        print(f"[GEMINI] ERROR in generate_script: {error_str}")
-        if "429" in error_str or "quota" in error_str.lower() or "RESOURCE_EXHAUSTED" in error_str:
-            print(f"[SCRIPT] Gemini quota exceeded, using fallback template")
-            return random.choice(FALLBACK_TEMPLATES)
-        print(f"[SCRIPT] Gemini error in generate_script, using fallback: {error_str[:100]}")
-        return random.choice(FALLBACK_TEMPLATES)
+def call_gemini(prompt: str, retries: int = 2) -> str:
+    """Call Gemini API with retry logic."""
+    for attempt in range(retries):
+        try:
+            print(f"[GEMINI] Attempt {attempt + 1}/{retries}...")
+            response = model.generate_content(prompt)
+            print(f"[GEMINI] Success, response length: {len(response.text.strip())} chars")
+            return response.text
+        except Exception as e:
+            error_str = str(e)
+            print(f"[GEMINI] Attempt {attempt + 1} failed: {error_str[:100]}")
+            if attempt == retries - 1:
+                raise e
+    return ""
 
 
 def clean_script(text: str) -> str:
     """Clean Gemini output - remove garbage formatting."""
     lines = text.split("\n")
     lines = [l.strip() for l in lines if l.strip()]
-    # Remove markdown and limit to 20 lines
     cleaned = []
     for line in lines[:20]:
         # Remove markdown markers
         line = line.replace("**", "").replace("*", "")
         line = line.replace('"', "")
-        if line and not line.startswith(("Here", "This", "Note:", "Format:", "Example")):
+        # Case-insensitive prefix check
+        if line and not any(line.lower().startswith(p) for p in BAD_PREFIXES):
             cleaned.append(line)
     return "\n".join(cleaned)
+
+
+def generate_script(topic: str) -> str:
+    """Generate viral short-form video script from topic (single API call).
+    
+    Args:
+        topic: Topic for the video
+        
+    Returns:
+        Clean viral script with hook, story, retention
+    """
+    if not GEMINI_API_KEY:
+        print(f"[GEMINI] SKIP: No API key configured")
+        return generate_fallback_script(topic)
+
+    prompt = f"""Write a VIRAL short-form video script.
+
+Topic: {topic}
+
+STYLE:
+- Reddit confession tone
+- First person storytelling
+- Emotional twist at end
+
+RULES:
+- Max 120 words
+- Strong hook in first line
+- Short punchy lines
+- Each line = caption style
+- No explanations, only script
+
+Generate now:"""
+
+    try:
+        raw = call_gemini(prompt, retries=2)
+        cleaned = clean_script(raw)
+        return trim_to_word_limit(cleaned, MAX_SCRIPT_WORDS)
+    except Exception as e:
+        print(f"[SCRIPT ERROR] {e}")
+        return generate_fallback_script(topic)

@@ -277,11 +277,19 @@ def run_cron(secret: str):
             print(f"[CRON SKIP] {user_id} invalid token format")
             continue
         
-        # Exact time match (cron runs every 5 min, check if it's the exact minute)
-        if now.hour != settings["hour"] or now.minute != settings["minute"]:
+        # 5-minute window match (cron runs every 5 min, check if within window)
+        scheduled_time = now.replace(
+            hour=settings["hour"],
+            minute=settings["minute"],
+            second=0,
+            microsecond=0
+        )
+        diff_seconds = abs((now - scheduled_time).total_seconds())
+
+        if diff_seconds > 300:  # 5 minute window
             continue
-        
-        print(f"[CRON MATCH] {user_id} at {now.hour}:{now.minute:02d}")
+
+        print(f"[CRON MATCH] {user_id} at {now.hour}:{now.minute:02d} (diff: {int(diff_seconds)}s)")
 
         # 🚨 ATOMIC LOCK: Set is_posting=True AND last_posted_date=today (prevents retries same day)
         lock_res = supabase.table("users_settings") \
@@ -304,6 +312,18 @@ def run_cron(secret: str):
             continue
         
         redis_conn.set(lock_key, 1, ex=86400)
+        
+        # 🚨 EXTRA SAFETY: Verify our lock is still active (no race condition)
+        fresh_check = supabase.table("users_settings").select("is_posting,last_posted_date").eq("user_id", user_id).execute()
+        if fresh_check.data:
+            check = fresh_check.data[0]
+            # If is_posting is not True, another process modified it (race condition)
+            if not check.get("is_posting"):
+                print(f"[CRON SKIP] {user_id} lock lost (race condition)")
+                continue
+            # If last_posted_date != today, something is wrong (we just set it)
+            if check.get("last_posted_date") != today:
+                print(f"[CRON WARN] {user_id} last_posted_date mismatch, but proceeding")
         
         # Enqueue to Redis worker with retries (pass pre-fetched token)
         video_queue.enqueue(

@@ -1,29 +1,9 @@
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system dependencies (FULL for video/audio processing)
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    git \
-    curl \
-    build-essential \
-    libgl1 \
-    libglib2.0-0 \
-    libsndfile1 \
-    && rm -rf /var/lib/apt/lists/*
+RUN pip install runpod
 
-# Copy requirements first (cache optimization)
-COPY requirements.txt .
+COPY handler.py .
 
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
-
-# Copy full project
-COPY . .
-
-# Prevent Python buffering logs (important for RunPod logs)
-ENV PYTHONUNBUFFERED=1
-
-# RunPod serverless handler
 CMD ["python", "handler.py"]

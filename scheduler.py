@@ -30,7 +30,7 @@ def trigger_render(topic: str, user_id: str, token_data: dict) -> dict:
                     "token_data": token_data  # Pass user token for upload
                 }
             },
-            timeout=30
+            timeout=60  # Increased for cold start
         )
         result = res.json()
         print(f"[RUNPOD] Response: {result}")

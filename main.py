@@ -8,6 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
+# Validate environment variables on startup
+from validate_env import validate_env
+validate_env()
+
 from script_engine import generate_script
 from tts import generate_audio
 from video_fetcher import fetch_video

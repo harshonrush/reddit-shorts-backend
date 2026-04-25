@@ -3,6 +3,10 @@ import os
 import redis
 from rq import Worker, Queue
 
+# Validate environment variables on startup
+from validate_env import validate_env
+validate_env()
+
 # Import job functions so RQ can deserialize them
 from scheduler import daily_job
 

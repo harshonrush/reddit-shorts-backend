@@ -2,17 +2,28 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies including ffmpeg
+# Install system dependencies (FULL for video/audio processing)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
+    git \
+    curl \
+    build-essential \
+    libgl1 \
+    libglib2.0-0 \
+    libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
+# Copy requirements first (cache optimization)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy full project
 COPY . .
 
-# RunPod serverless entry point
+# Prevent Python buffering logs (important for RunPod logs)
+ENV PYTHONUNBUFFERED=1
+
+# RunPod serverless handler
 CMD ["python", "handler.py"]

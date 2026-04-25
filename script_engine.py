@@ -54,9 +54,9 @@ FALLBACK_TOPICS = [
 def generate_story(topic: str) -> str:
     """Generate viral Reddit-style story with strong hook."""
     if not GEMINI_API_KEY:
-        # Fallback for testing
+        print(f"[GEMINI] SKIP: No API key configured, using fallback for {topic}")
         return f"I never thought {topic} would change everything. But it did."
-    
+
     try:
         prompt = f"""Write an emotional, engaging Reddit-style story about {topic}.
 Make it sound authentic and viral-worthy.
@@ -71,10 +71,13 @@ Make it sound authentic and viral-worthy.
         print(f"[GEMINI] Response received, length: {len(response.text.strip())} chars")
         return response.text.strip()
     except Exception as e:
-        if "429" in str(e) or "quota" in str(e).lower() or "RESOURCE_EXHAUSTED" in str(e):
+        error_str = str(e)
+        print(f"[GEMINI] ERROR: {error_str}")
+        if "429" in error_str or "quota" in error_str.lower() or "RESOURCE_EXHAUSTED" in error_str:
             print(f"[SCRIPT] Gemini quota exceeded, using fallback story for: {topic}")
             return f"I never expected {topic} to affect me like this. What I discovered changed everything I thought I knew."
-        raise
+        print(f"[SCRIPT] Gemini error, using fallback: {error_str[:100]}")
+        return f"I never expected {topic} to affect me like this. What I discovered changed everything I thought I knew."
 
 
 def generate_script(topic_or_story: str) -> str:
@@ -87,9 +90,9 @@ def generate_script(topic_or_story: str) -> str:
         Clean viral script with hook, story, retention
     """
     if not GEMINI_API_KEY:
-        # Fallback mock script
+        print(f"[GEMINI] SKIP: No API key, using fallback template")
         return random.choice(FALLBACK_TEMPLATES)
-    
+
     try:
         prompt = f"""You are writing a VIRAL short-form video script for reels.
 
@@ -122,10 +125,13 @@ Now generate:"""
         print(f"[GEMINI] Script response received, cleaning...")
         return clean_script(response.text)
     except Exception as e:
-        if "429" in str(e) or "quota" in str(e).lower() or "RESOURCE_EXHAUSTED" in str(e):
+        error_str = str(e)
+        print(f"[GEMINI] ERROR in generate_script: {error_str}")
+        if "429" in error_str or "quota" in error_str.lower() or "RESOURCE_EXHAUSTED" in error_str:
             print(f"[SCRIPT] Gemini quota exceeded, using fallback template")
             return random.choice(FALLBACK_TEMPLATES)
-        raise
+        print(f"[SCRIPT] Gemini error in generate_script, using fallback: {error_str[:100]}")
+        return random.choice(FALLBACK_TEMPLATES)
 
 
 def clean_script(text: str) -> str:

@@ -3,6 +3,108 @@ import random
 import os
 import logging
 import time
+import requests
+
+# RunPod Serverless Configuration
+RUNPOD_URL = os.getenv("RUNPOD_URL", "https://api.runpod.ai/v2/jq2krz5bpspj1g/run")
+RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
+
+def trigger_render(topic: str, user_id: str, token_data: dict) -> dict:
+    """Trigger video rendering on RunPod serverless GPU."""
+    if not RUNPOD_API_KEY:
+        print(f"[RUNPOD] ERROR: No API key configured")
+        return {"status": "error", "message": "Missing RUNPOD_API_KEY"}
+
+    try:
+        print(f"[RUNPOD] Triggering render for user {user_id}, topic: {topic}")
+        res = requests.post(
+            RUNPOD_URL,
+            headers={
+                "Authorization": f"Bearer {RUNPOD_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "input": {
+                    "topic": topic,
+                    "user_id": user_id,
+                    "token_data": token_data  # Pass user token for upload
+                }
+            },
+            timeout=30
+        )
+        result = res.json()
+        print(f"[RUNPOD] Response: {result}")
+        return result
+    except Exception as e:
+        print(f"[RUNPOD] ERROR: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+def poll_runpod_status(job_id: str, user_id: str, max_wait: int = 600) -> dict:
+    """Poll RunPod job status until COMPLETED or timeout."""
+    # Extract endpoint ID from RUNPOD_URL
+    # URL format: https://api.runpod.ai/v2/ENDPOINT_ID/run
+    endpoint_id = RUNPOD_URL.split("/v2/")[1].replace("/run", "")
+    status_url = f"https://api.runpod.ai/v2/{endpoint_id}/status/{job_id}"
+
+    print(f"[RUNPOD] Polling status for job {job_id}...")
+    start_time = time.time()
+
+    while time.time() - start_time < max_wait:
+        try:
+            res = requests.get(
+                status_url,
+                headers={"Authorization": f"Bearer {RUNPOD_API_KEY}"},
+                timeout=10
+            )
+            status_data = res.json()
+            status = status_data.get("status")
+            print(f"[RUNPOD] Job {job_id} status: {status}")
+
+            if status == "COMPLETED":
+                output = status_data.get("output", {})
+                if output.get("status") == "success":
+                    # Success - update user settings
+                    from datetime import datetime
+                    save_settings(user_id, {
+                        "is_posting": False,
+                        "last_posted_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                        "last_error": None
+                    })
+                    print(f"[RUNPOD] Job {job_id} completed successfully for {user_id}")
+                    return {"success": True, "video_url": output.get("video_url")}
+                else:
+                    # RunPod job failed
+                    error_msg = output.get("message", "Unknown error")
+                    save_settings(user_id, {
+                        "is_posting": False,
+                        "last_error": f"RunPod failed: {error_msg[:100]}"
+                    })
+                    print(f"[RUNPOD] Job {job_id} failed for {user_id}: {error_msg}")
+                    return {"success": False, "error": error_msg}
+
+            elif status in ["FAILED", "CANCELLED", "TIMED_OUT"]:
+                save_settings(user_id, {
+                    "is_posting": False,
+                    "last_error": f"RunPod status: {status}"
+                })
+                print(f"[RUNPOD] Job {job_id} {status} for {user_id}")
+                return {"success": False, "error": f"Job {status}"}
+
+            # Still running - wait 10 seconds before next poll
+            time.sleep(10)
+
+        except Exception as e:
+            print(f"[RUNPOD] Polling error: {e}")
+            time.sleep(10)
+
+    # Timeout reached
+    print(f"[RUNPOD] Timeout waiting for job {job_id}")
+    save_settings(user_id, {
+        "is_posting": False,
+        "last_error": "RunPod timeout"
+    })
+    return {"success": False, "error": "Polling timeout"}
 
 # Setup logging
 logging.basicConfig(
@@ -37,10 +139,6 @@ from db import supabase
 
 def load_settings(user_id: str):
     """Load auto-post settings for a user from Supabase."""
-    if supabase is None:
-        print(f"[DB] CRITICAL: Supabase client is None in load_settings for {user_id}")
-        raise Exception("Supabase not initialized - check env vars")
-
     res = supabase.table("users_settings") \
         .select("*") \
         .eq("user_id", user_id) \
@@ -65,13 +163,22 @@ def load_settings(user_id: str):
     return default_data
 
 
+def safe_update(table: str, user_id: str, updates: dict):
+    """Safely update Supabase with error handling."""
+    try:
+        res = supabase.table(table) \
+            .update(updates) \
+            .eq("user_id", user_id) \
+            .execute()
+        print(f"[DB] Updated {table} for {user_id}: {list(updates.keys())}")
+        return res
+    except Exception as e:
+        print(f"[DB ERROR] Failed to update {table} for {user_id}: {e}")
+        raise
+
+
 def save_settings(user_id: str, updates: dict):
     """Save auto-post settings for a user to Supabase."""
-    if supabase is None:
-        print(f"[DB] CRITICAL: Supabase client is None, cannot save settings for {user_id}")
-        print(f"[DB] Attempted updates: {updates}")
-        raise Exception("Supabase not initialized - check env vars")
-
     try:
         # Use UPDATE instead of UPSERT for existing records
         res = supabase.table("users_settings") \
@@ -102,164 +209,63 @@ def token_exists(user_id: str) -> bool:
 
 
 def daily_job(user_id: str, token_data: dict = None):
-    """Generate and upload video daily."""
+    """Orchestrate daily video generation via RunPod serverless GPU."""
     print(f"[WORKER] daily_job STARTED for user {user_id}")
 
-    settings = load_settings(user_id)
-    if not settings.get("enabled", False):
-        logger.info(f"[USER:{user_id}] Auto-post disabled, skipping.")
-        print(f"[WORKER] daily_job SKIPPED (disabled) for {user_id}")
-        return
-
-    # Check if token provided (cron passes it, manual/trigger may not)
-    if not token_data:
-        logger.warning(f"[USER:{user_id}] No token_data provided, skipping.")
-        print(f"[WORKER] daily_job SKIPPED (no token) for {user_id}")
-        # Unlock user since we can't proceed
-        save_settings(user_id, {"is_posting": False, "last_error": "No token provided"})
-        return
-    
-    # Pick topic based on user's niche
-    niche = settings.get("niche", "stories")
-    if niche in NICHE_TOPICS:
-        topic = random.choice(NICHE_TOPICS[niche])
-    else:
-        topic = random.choice(TOPICS)
-    print(f"[SCHEDULER] [USER:{user_id}] Niche: {niche} | Topic: {topic}")
-    
-    start_time = time.time()
-    def check_timeout():
-        if time.time() - start_time > 300:
-            raise Exception("Job timeout")
-    
-    audio_path = video_path = ass_path = None
     try:
-        # Import here to avoid circular imports
-        from tts import generate_audio
-        from video_fetcher import fetch_video
-        from subtitle_ass import generate_ass
-        from renderer import render_video
-        from uploader import upload_video
-        import tempfile
-        
-        OUTPUT_DIR = os.path.abspath(os.path.join("..", "assets", "output"))
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        
-        # 1. Generate script directly from topic (single API call)
-        from script_engine import generate_script
-        script = generate_script(topic)
-
-        check_timeout()
-
-        # 2. Audio
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-            audio_path = f.name
-        generate_audio(script, audio_path)
-        
-        check_timeout()
-
-        # 3. Video
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
-            video_path = f.name
-            
-        try:
-            fetch_video(video_path)
-        except Exception as e:
-            logger.error(f"[USER:{user_id}] Video fetch failed: {e}. Using light video fallback.")
-            try:
-                from video_fetcher import create_blank_video
-                create_blank_video(video_path)
-            except Exception as inner_e:
-                logger.error(f"[USER:{user_id}] Fallback video creation failed: {inner_e}")
-                raise
-        
-        check_timeout()
-        
-        # 4. Subtitles
-        with tempfile.NamedTemporaryFile(suffix=".ass", delete=False) as f:
-            ass_path = f.name
-        generate_ass(script, audio_path, ass_path)
-        
-        # 5. Render (per-user folder)
-        user_output_dir = os.path.join(OUTPUT_DIR, user_id)
-        os.makedirs(user_output_dir, exist_ok=True)
-        filename = f"auto_reel_{topic.replace(' ', '_')}.mp4"
-        output_path = os.path.join(user_output_dir, filename)
-        result = render_video(audio_path, video_path, ass_path, output_path, max_duration=60)
-        
-        if not result:
-            print(f"[SCHEDULER] ❌ Render failed for user {user_id}")
+        settings = load_settings(user_id)
+        if not settings.get("enabled", False):
+            logger.info(f"[USER:{user_id}] Auto-post disabled, skipping.")
+            print(f"[WORKER] daily_job SKIPPED (disabled) for {user_id}")
             return
-            
-        check_timeout()
-        
 
-        # 6. Upload to YouTube (with retry)
-        logger.info(f"[USER:{user_id}] Uploading to YouTube...")
-        res = None
-        for attempt in range(3):
-            try:
-                res = upload_video(
-                    file_path=output_path,
-                    title=f"Crazy {topic.title()} Story",
-                    description=f"#{topic.replace(' ', '')} #shorts #reddit #storytime",
-                    tags=["reddit", "story", "shorts", topic],
-                    user_id=user_id,
-                    token_data=token_data
-                )
-                print(f"[USER:{user_id}] UPLOAD SUCCESS: {res}")
-                break
-            except Exception as e:
-                logger.error(f"[USER:{user_id}] Upload attempt {attempt + 1} failed: {e}")
-                print(f"[USER:{user_id}] UPLOAD FAILED: {str(e)}")
-                if attempt == 2:  # Last attempt
-                    logger.error(f"[USER:{user_id}] All upload attempts failed")
-                    
-                    # 🔥 IMPORTANT: UNLOCK USER (prevent stuck state)
-                    save_settings(user_id, {"is_posting": False, "last_error": "Upload failed after 3 attempts"})
-                    
-                    return
-                time.sleep(5)  # Wait 5s before retry
+        # Check if token provided (cron passes it, manual/trigger may not)
+        if not token_data:
+            logger.warning(f"[USER:{user_id}] No token_data provided, skipping.")
+            print(f"[WORKER] daily_job SKIPPED (no token) for {user_id}")
+            save_settings(user_id, {"is_posting": False, "last_error": "No token provided"})
+            return
 
-        if res:
-            logger.info(f"[USER:{user_id}] Posted: https://youtube.com/watch?v={res['id']}")
-            # Mark complete: unlock, set last_posted_date, clear error
-            from datetime import datetime
+        # Pick topic based on user's niche
+        niche = settings.get("niche", "stories")
+        if niche in NICHE_TOPICS:
+            topic = random.choice(NICHE_TOPICS[niche])
+        else:
+            topic = random.choice(TOPICS)
+        print(f"[SCHEDULER] [USER:{user_id}] Niche: {niche} | Topic: {topic}")
+
+        # TRIGGER RUNPOD SERVERLESS GPU (with user token for upload)
+        result = trigger_render(topic, user_id, token_data)
+
+        if result.get("id"):
+            job_id = result.get("id")
+            print(f"[RUNPOD] Job queued for {user_id}: {job_id}")
+
+            # POLL until job completes (max 10 minutes)
+            poll_result = poll_runpod_status(job_id, user_id, max_wait=600)
+
+            if poll_result.get("success"):
+                print(f"[RUNPOD] Video uploaded successfully for {user_id}")
+            else:
+                print(f"[RUNPOD] Job failed for {user_id}: {poll_result.get('error')}")
+        else:
+            error_msg = result.get("message", "Unknown error")
+            print(f"[RUNPOD] Failed to queue job for {user_id}: {error_msg}")
             save_settings(user_id, {
                 "is_posting": False,
-                "last_posted_date": datetime.utcnow().strftime("%Y-%m-%d"),
-                "last_error": None
+                "last_error": f"RunPod trigger failed: {error_msg[:100]}"
             })
-        else:
-            logger.error(f"[USER:{user_id}] Upload returned no response")
-            # Unlock only (no last_posted_date, allows retry on next cron tick)
-            save_settings(user_id, {"is_posting": False})
-        
+
     except Exception as e:
         logger.error(f"[USER:{user_id}] Error in daily_job: {e}")
         import traceback
         logger.error(f"[USER:{user_id}] {traceback.format_exc()}")
-        
-        # Unlock and record error (no last_posted_date, allows retry)
         save_settings(user_id, {
             "is_posting": False,
             "last_error": str(e)[:200]
         })
     finally:
         print(f"[WORKER] daily_job ENDED for {user_id}")
-        try:
-            # 🔥 FAIL-SAFE: Ensure user is never stuck in is_posting=True state
-            save_settings(user_id, {"is_posting": False})
-            print(f"[WORKER] daily_job FAIL-SAFE unlock executed for {user_id}")
-        except Exception as unlock_err:
-            print(f"[WORKER] daily_job FAIL-SAFE unlock FAILED for {user_id}: {unlock_err}")
-
-        for f in [audio_path, video_path, ass_path]:
-            try:
-                if f and os.path.exists(f):
-                    os.remove(f)
-            except:
-                pass
 
 
 def update_schedule(enabled: bool, hour: int, minute: int, user_id: str, niche: str):

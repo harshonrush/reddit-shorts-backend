@@ -12,6 +12,7 @@ import os
 def handler(job):
     try:
         topic = job["input"].get("topic", "success mindset")
+        token_data = job["input"].get("token_data")  # User's YouTube token
 
         # 1. Story
         story = generate_story(topic)
@@ -38,11 +39,12 @@ def handler(job):
         output_path = f"/tmp/output_{topic}.mp4"
         render_video(audio_path, video_path, ass_path, output_path)
 
-        # 7. Upload
+        # 7. Upload using USER'S token (uploads to their channel)
         res = upload_video(
             file_path=output_path,
             title="Crazy Story",
-            description="#shorts #viral"
+            description="#shorts #viral",
+            token_data=token_data  # Pass user token for upload
         )
 
         return {

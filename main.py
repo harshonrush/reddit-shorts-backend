@@ -16,7 +16,7 @@ from renderer import render_video
 from uploader import upload_video
 from auth_routes import router as auth_router
 from scheduler import update_schedule, load_settings, save_settings, daily_job
-from redis_queue import video_queue, redis_conn
+from redis_queue import video_queue, redis_conn, safe_redis_get, safe_redis_set
 from rq import Retry
 from db import supabase
 
@@ -58,9 +58,9 @@ def safe_filename(text):
 async def generate_video(request: GenerateRequest):
     # Rate limiting: 1 request per 60 seconds per user
     cooldown_key = f"cooldown:{request.user_id}"
-    if redis_conn.get(cooldown_key):
+    if safe_redis_get(cooldown_key):
         raise HTTPException(status_code=429, detail="Rate limit: Wait 60 seconds before next request")
-    redis_conn.set(cooldown_key, 1, ex=60)
+    safe_redis_set(cooldown_key, 1, ex=60)
 
     audio_path = video_path = ass_path = None
 
@@ -314,11 +314,11 @@ def run_cron(secret: str):
         
         # 🔥 REDIS LOCK: Prevent duplicate enqueuing (24h expiry)
         lock_key = f"lock:{user_id}:{today}"
-        if redis_conn.get(lock_key):
+        if safe_redis_get(lock_key):
             print(f"[CRON SKIP] {user_id} Redis lock exists (job already enqueued or running)")
             continue
-        
-        redis_conn.set(lock_key, 1, ex=86400)
+
+        safe_redis_set(lock_key, 1, ex=86400)
         
         # 🚨 EXTRA SAFETY: Verify our lock is still active (is_posting should be True)
         fresh_check = supabase.table("users_settings").select("is_posting").eq("user_id", user_id).execute()

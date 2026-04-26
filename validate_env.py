@@ -2,23 +2,18 @@ import os
 
 
 def validate_env():
-    """Validate all required environment variables on startup."""
-    required = [
-        "REDIS_URL",
-        "SUPABASE_URL",
-        "SUPABASE_KEY"
-    ]
+    """Validate environment variables based on environment."""
+    # RunPod doesn't need Supabase - it only renders video
+    if os.getenv("RUNPOD_ENV") == "true":
+        print("[ENV] RunPod environment - skipping Supabase validation")
+        return
 
-    missing = []
-    for key in required:
-        if not os.getenv(key):
-            missing.append(key)
+    # Railway needs Supabase for DB operations
+    required = ["REDIS_URL", "SUPABASE_URL", "SUPABASE_KEY"]
+
+    missing = [v for v in required if not os.getenv(v)]
 
     if missing:
-        raise RuntimeError(
-            f"\n❌ Missing required environment variables:\n" +
-            "\n".join([f"   - {k}" for k in missing]) +
-            "\n\nSet these in Railway dashboard and restart service."
-        )
+        raise RuntimeError(f"Missing env vars: {missing}")
 
-    print("✅ All environment variables validated")
+    print("✅ Railway environment validated")

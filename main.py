@@ -2,6 +2,7 @@ import os
 import tempfile
 import re
 import traceback
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,10 @@ import uvicorn
 # Validate environment variables on startup
 from validate_env import validate_env
 validate_env()
+
+# RunPod configuration
+RUNPOD_URL = os.getenv("RUNPOD_URL")
+RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
 
 from script_engine import generate_script
 from tts import generate_audio
@@ -60,54 +65,27 @@ def safe_filename(text):
 
 @app.post("/generate")
 async def generate_video(request: GenerateRequest):
-    # Rate limiting: 1 request per 60 seconds per user
+    """Call RunPod to generate video - no local rendering."""
+    # Rate limiting
     cooldown_key = f"cooldown:{request.user_id}"
     if safe_redis_get(cooldown_key):
-        raise HTTPException(status_code=429, detail="Rate limit: Wait 60 seconds before next request")
+        raise HTTPException(status_code=429, detail="Rate limit: Wait 60 seconds")
     safe_redis_set(cooldown_key, 1, ex=60)
 
-    audio_path = video_path = ass_path = None
-
     try:
-        # 1. Generate script (single API call)
-        script = generate_script(request.topic)
-
-        # 2. Audio
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-            audio_path = f.name
-        generate_audio(script, audio_path)
-
-        # 3. Background video
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
-            video_path = f.name
-        fetch_video(video_path)
-
-        # 4. Subtitles
-        with tempfile.NamedTemporaryFile(suffix=".ass", delete=False) as f:
-            ass_path = f.name
-        generate_ass(script, audio_path, ass_path)
-
-        # 5. Per-user output
-        user_output_dir = os.path.join(OUTPUT_DIR, request.user_id)
-        os.makedirs(user_output_dir, exist_ok=True)
-
-        filename = f"reel_{safe_filename(request.topic)}.mp4"
-        output_path = os.path.join(user_output_dir, filename)
-
-        # 6. Render
-        render_video(audio_path, video_path, ass_path, output_path, max_duration=90)
-
-        return FileResponse(output_path, media_type="video/mp4", filename=filename)
-
+        res = requests.post(
+            RUNPOD_URL,
+            headers={"Authorization": f"Bearer {RUNPOD_API_KEY}"},
+            json={
+                "input": {
+                    "topic": request.topic
+                }
+            },
+            timeout=60
+        )
+        return res.json()
     except Exception as e:
-        print(f"ERROR: {e}")
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
-    finally:
-        for f in [audio_path, video_path, ass_path]:
-            if f and os.path.exists(f):
-                os.remove(f)
 
 
 @app.post("/upload")

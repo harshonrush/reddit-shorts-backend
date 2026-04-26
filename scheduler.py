@@ -4,6 +4,7 @@ import os
 import logging
 import time
 import requests
+from datetime import datetime
 
 # RunPod Serverless Configuration
 RUNPOD_URL = os.getenv("RUNPOD_URL", "https://api.runpod.ai/v2/jq2krz5bpspj1g/run")
@@ -64,9 +65,8 @@ def poll_runpod_status(job_id: str, user_id: str, max_wait: int = 600) -> dict:
             if status == "COMPLETED":
                 output = status_data.get("output", {})
                 if output.get("status") == "success":
-                    # Success - update user settings
-                    from datetime import datetime
-                    save_settings(user_id, {
+                    # Success - return video path, Railway will upload
+                    return {"success": True, "video_path": output.get("video_path")}
                         "is_posting": False,
                         "last_posted_date": datetime.utcnow().strftime("%Y-%m-%d"),
                         "last_error": None
@@ -76,19 +76,11 @@ def poll_runpod_status(job_id: str, user_id: str, max_wait: int = 600) -> dict:
                 else:
                     # RunPod job failed
                     error_msg = output.get("message", "Unknown error")
-                    save_settings(user_id, {
-                        "is_posting": False,
-                        "last_error": f"RunPod failed: {error_msg[:100]}"
-                    })
-                    print(f"[RUNPOD] Job {job_id} failed for {user_id}: {error_msg}")
+                    print(f"[RUNPOD] Job {job_id} failed: {error_msg}")
                     return {"success": False, "error": error_msg}
 
             elif status in ["FAILED", "CANCELLED", "TIMED_OUT"]:
-                save_settings(user_id, {
-                    "is_posting": False,
-                    "last_error": f"RunPod status: {status}"
-                })
-                print(f"[RUNPOD] Job {job_id} {status} for {user_id}")
+                print(f"[RUNPOD] Job {job_id} {status}")
                 return {"success": False, "error": f"Job {status}"}
 
             # Still running - wait 10 seconds before next poll
@@ -100,10 +92,6 @@ def poll_runpod_status(job_id: str, user_id: str, max_wait: int = 600) -> dict:
 
     # Timeout reached
     print(f"[RUNPOD] Timeout waiting for job {job_id}")
-    save_settings(user_id, {
-        "is_posting": False,
-        "last_error": "RunPod timeout"
-    })
     return {"success": False, "error": "Polling timeout"}
 
 # Setup logging
@@ -245,9 +233,34 @@ def daily_job(user_id: str, token_data: dict = None):
             poll_result = poll_runpod_status(job_id, user_id, max_wait=600)
 
             if poll_result.get("success"):
-                print(f"[RUNPOD] Video uploaded successfully for {user_id}")
+                video_path = poll_result.get("video_path")
+                print(f"[RUNPOD] Video ready at {video_path}")
+
+                # Upload to YouTube using user's token
+                from uploader import upload_video
+                res = upload_video(
+                    file_path=video_path,
+                    title=f"{topic.title()} Story",
+                    description=f"#{niche} #shorts #viral",
+                    token_data=token_data
+                )
+
+                if res:
+                    print(f"[UPLOAD] Video uploaded: https://youtube.com/watch?v={res['id']}")
+                    save_settings(user_id, {
+                        "is_posting": False,
+                        "last_posted_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                        "last_error": None
+                    })
+                else:
+                    print(f"[UPLOAD] Failed for {user_id}")
+                    save_settings(user_id, {"is_posting": False, "last_error": "Upload failed"})
             else:
                 print(f"[RUNPOD] Job failed for {user_id}: {poll_result.get('error')}")
+                save_settings(user_id, {
+                    "is_posting": False,
+                    "last_error": f"RunPod failed: {poll_result.get('error', 'Unknown')[:100]}"
+                })
         else:
             error_msg = result.get("message", "Unknown error")
             print(f"[RUNPOD] Failed to queue job for {user_id}: {error_msg}")

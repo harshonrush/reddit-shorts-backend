@@ -4,11 +4,13 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y ffmpeg
 
-COPY . .
+# copy requirements FIRST (for caching)
+COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install runpod
 
-ENV RUNPOD_ENV=true
+# THEN copy rest of code
+COPY . .
 
 CMD ["python", "handler.py"]

@@ -67,12 +67,6 @@ def poll_runpod_status(job_id: str, user_id: str, max_wait: int = 600) -> dict:
                 if output.get("status") == "success":
                     # Success - return video path, Railway will upload
                     return {"success": True, "video_path": output.get("video_path")}
-                        "is_posting": False,
-                        "last_posted_date": datetime.utcnow().strftime("%Y-%m-%d"),
-                        "last_error": None
-                    })
-                    print(f"[RUNPOD] Job {job_id} completed successfully for {user_id}")
-                    return {"success": True, "video_url": output.get("video_url")}
                 else:
                     # RunPod job failed
                     error_msg = output.get("message", "Unknown error")

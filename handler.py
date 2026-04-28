@@ -3,7 +3,7 @@ import sys
 import tempfile
 import os
 
-from script_engine import generate_story, generate_script
+from script_engine import generate_script
 from tts import generate_audio
 from video_fetcher import fetch_video
 from subtitle_ass import generate_ass
@@ -17,11 +17,8 @@ def handler(job):
 
         topic = job["input"].get("topic", "success mindset")
 
-        # 1. Story
-        story = generate_story(topic)
-
-        # 2. Script
-        script = generate_script(story)
+        # Generate script directly from topic
+        script = generate_script(topic)
 
         # 3. Temp files
         audio_path = tempfile.mktemp(suffix=".mp3")

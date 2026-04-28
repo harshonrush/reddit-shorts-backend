@@ -4,6 +4,8 @@ import os
 import logging
 import time
 import requests
+import base64
+import tempfile
 from datetime import datetime
 
 # RunPod Serverless Configuration
@@ -65,8 +67,17 @@ def poll_runpod_status(job_id: str, user_id: str, max_wait: int = 600) -> dict:
             if status == "COMPLETED":
                 output = status_data.get("output", {})
                 if output.get("status") == "success":
-                    # Success - return video path, Railway will upload
-                    return {"success": True, "video_path": output.get("video_path")}
+                    # Decode base64 video and save to temp file
+                    video_base64 = output.get("video")
+                    if video_base64:
+                        video_bytes = base64.b64decode(video_base64)
+                        output_path = tempfile.mktemp(suffix=".mp4")
+                        with open(output_path, "wb") as f:
+                            f.write(video_bytes)
+                        print(f"[RUNPOD] Video saved to {output_path}")
+                        return {"success": True, "video_path": output_path}
+                    else:
+                        return {"success": False, "error": "No video data in response"}
                 else:
                     # RunPod job failed
                     error_msg = output.get("message", "Unknown error")

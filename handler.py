@@ -2,6 +2,7 @@ import runpod
 import sys
 import tempfile
 import os
+import base64
 
 from script_engine import generate_script
 from tts import generate_audio
@@ -34,10 +35,16 @@ def handler(job):
 
         print("[RUNPOD] Video rendered successfully", file=sys.stderr)
 
-        # Return video path - Railway will download and upload
+        # Read and encode video to base64
+        with open(output_path, "rb") as f:
+            video_bytes = f.read()
+        video_base64 = base64.b64encode(video_bytes).decode("utf-8")
+
+        print(f"[RUNPOD] Video encoded to base64 ({len(video_base64)} chars)", file=sys.stderr)
+
         return {
             "status": "success",
-            "video_path": output_path
+            "video": video_base64
         }
 
     except Exception as e:

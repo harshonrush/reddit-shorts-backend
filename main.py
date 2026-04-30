@@ -33,17 +33,11 @@ from scheduler import update_schedule, load_settings, save_settings, daily_job
 from redis_queue import video_queue, redis_conn, safe_redis_get, safe_redis_set
 from rq import Retry
 from db import supabase
+from storage import upload_video_bytes
 
 app = FastAPI(title="Reddit Reels API")
 
-# Unified path for saving and serving videos
-BASE_DIR = "/app/assets"
-OUTPUT_DIR = os.path.join(BASE_DIR, "output")
-
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# Mount static files for serving videos
-app.mount("/assets", StaticFiles(directory=BASE_DIR), name="assets")
+# Videos stored in Supabase Storage (not local filesystem)
 
 # Include auth routes
 app.include_router(auth_router)
@@ -170,24 +164,21 @@ def process_video_job(job_id: str, script: str, user_id: str):
             video_base64 = output.get("video")
             if video_base64:
                 video_bytes = base64.b64decode(video_base64)
-                output_path = os.path.join(OUTPUT_DIR, user_id, f"video_{job_id}.mp4")
-                os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                with open(output_path, "wb") as f:
-                    f.write(video_bytes)
 
-                print(f"[FILE SAVED] {output_path} exists: {os.path.exists(output_path)}")
+                # Upload to Supabase Storage
+                video_url = upload_video_bytes(video_bytes, user_id, job_id)
 
                 # FRESH object - atomic write
                 job_data = {
                     "status": "completed",
                     "script": script,
                     "user_id": user_id,
-                    "video_url": f"/assets/output/{user_id}/video_{job_id}.mp4",
+                    "video_url": video_url,
                     "completed_at": datetime.utcnow().isoformat()
                 }
                 redis_conn.delete(job_id)
-                safe_redis_set(job_id, json.dumps(job_data), ex=3600)
-                print(f"[JOB {job_id}] Video completed: {output_path}")
+                safe_redis_set(job_id, job_data, ex=3600)
+                print(f"[JOB {job_id}] Uploaded to Supabase: {video_url}")
             else:
                 raise Exception("No video data in RunPod output")
         else:
@@ -332,39 +323,8 @@ async def upload_to_youtube(request: UploadRequest):
 
 @app.post("/upload-latest")
 async def upload_latest(user_id: str = "default"):
-    """Upload most recent generated video (for testing)."""
-    try:
-        user_dir = os.path.join(OUTPUT_DIR, user_id)
-
-        if not os.path.exists(user_dir):
-            raise HTTPException(status_code=404, detail="No videos for this user.")
-
-        videos = [f for f in os.listdir(user_dir) if f.endswith(".mp4")]
-
-        if not videos:
-            raise HTTPException(status_code=404, detail="No videos found.")
-
-        videos.sort(
-            key=lambda x: os.path.getmtime(os.path.join(user_dir, x)),
-            reverse=True
-        )
-
-        latest = os.path.join(user_dir, videos[0])
-
-        res = upload_video(
-            file_path=latest,
-            title="Crazy Reddit Story",
-            description="#shorts #reddit #storytime",
-            tags=["reddit", "story", "shorts", "viral"]
-        )
-
-        return {
-            "status": "uploaded",
-            "youtube_id": res["id"],
-            "url": f"https://youtube.com/watch?v={res['id']}"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """DEPRECATED: Videos now stored in Supabase. Use video_url from job status."""
+    raise HTTPException(status_code=400, detail="Use /job-status/{job_id} to get video_url")
 
 
 @app.on_event("startup")

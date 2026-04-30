@@ -19,7 +19,7 @@ from validate_env import validate_env
 validate_env()
 
 # RunPod configuration
-RUNPOD_URL = os.getenv("RUNPOD_URL")
+RUNPOD_URL = os.getenv("RUNPOD_URL", "https://api.runpod.ai/v2/jq2krz5bpspj1g/run")
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
 
 from script_engine import generate_script
@@ -36,12 +36,12 @@ from db import supabase
 
 app = FastAPI(title="Reddit Reels API")
 
-# Output directory for generated videos
-OUTPUT_DIR = "/app/assets/output"
+# Output directory for generated videos (absolute path for stability)
+OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets", "output"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Mount static files for serving videos
-app.mount("/assets", StaticFiles(directory="/app/assets"), name="assets")
+app.mount("/assets", StaticFiles(directory=os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets"))), name="assets")
 
 # Include auth routes
 app.include_router(auth_router)
@@ -53,11 +53,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-OUTPUT_DIR = os.path.abspath(os.path.join("..", "assets", "output"))
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# Redis Queue handles concurrency - no threading needed
 
 
 class GenerateRequest(BaseModel):
@@ -105,7 +100,7 @@ def safe_filename(text):
 def process_video_job(job_id: str, script: str, user_id: str):
     """RQ job: Process video generation via RunPod and update status."""
     try:
-        # SAFE: Always create fresh object + atomic delete-before-set
+        # Initialize job data
         job_data = {
             "status": "processing",
             "script": script,
@@ -113,7 +108,7 @@ def process_video_job(job_id: str, script: str, user_id: str):
             "created_at": datetime.utcnow().isoformat()
         }
         redis_conn.delete(job_id)
-        safe_redis_set(job_id, job_data, ex=3600)
+        safe_redis_set(job_id, json.dumps(job_data), ex=3600)
 
         # Step 1: Trigger RunPod job (async)
         print(f"[JOB {job_id}] Triggering RunPod job...")
@@ -123,6 +118,7 @@ def process_video_job(job_id: str, script: str, user_id: str):
             json={"input": {"topic": script[:100]}},
             timeout=60
         )
+        res.raise_for_status()
 
         result = res.json()
         print(f"[JOB {job_id}] RunPod trigger response: {result}")
@@ -132,7 +128,9 @@ def process_video_job(job_id: str, script: str, user_id: str):
             raise Exception(f"RunPod didn't return job id: {result}")
 
         # Step 2: Poll for completion (max 60 attempts = ~2 min)
-        status_url = f"{RUNPOD_URL}/{runpod_job_id}"
+        # Fix: RunPod status path is /status/, not /run/
+        endpoint_id = RUNPOD_URL.split("/v2/")[1].replace("/run", "")
+        status_url = f"https://api.runpod.ai/v2/{endpoint_id}/status/{runpod_job_id}"
         output = None
 
         for attempt in range(60):
@@ -143,7 +141,12 @@ def process_video_job(job_id: str, script: str, user_id: str):
                 headers={"Authorization": f"Bearer {RUNPOD_API_KEY}"},
                 timeout=30
             )
-            status_data = status_res.json()
+            
+            try:
+                status_data = status_res.json()
+            except Exception as json_err:
+                print(f"[JOB {job_id}] JSON Parse Error: {json_err} | Response: {status_res.text[:200]}")
+                raise Exception(f"Failed to parse RunPod response: {status_res.text[:100]}")
 
             runpod_status = status_data.get("status")
             print(f"[JOB {job_id}] Poll {attempt+1}/60: {runpod_status}")
@@ -179,7 +182,7 @@ def process_video_job(job_id: str, script: str, user_id: str):
                     "completed_at": datetime.utcnow().isoformat()
                 }
                 redis_conn.delete(job_id)
-                safe_redis_set(job_id, job_data, ex=3600)
+                safe_redis_set(job_id, json.dumps(job_data), ex=3600)
                 print(f"[JOB {job_id}] Video completed: {output_path}")
             else:
                 raise Exception("No video data in RunPod output")
@@ -197,7 +200,7 @@ def process_video_job(job_id: str, script: str, user_id: str):
             "failed_at": datetime.utcnow().isoformat()
         }
         redis_conn.delete(job_id)
-        safe_redis_set(job_id, job_data, ex=3600)
+        safe_redis_set(job_id, json.dumps(job_data), ex=3600)
 
 
 @app.post("/generate-script", response_model=ScriptResponse)
@@ -238,7 +241,7 @@ async def generate_video_job(request: VideoJobRequest):
             "created_at": datetime.utcnow().isoformat()
         }
         redis_conn.delete(job_id)
-        safe_redis_set(job_id, job_data, ex=3600)
+        safe_redis_set(job_id, json.dumps(job_data), ex=3600)
 
         # Enqueue job to RQ
         video_queue.enqueue(

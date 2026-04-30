@@ -223,8 +223,8 @@ async def generate_video_job(request: VideoJobRequest):
     safe_redis_set(cooldown_key, 1, ex=60)
 
     try:
-        # Create job ID
-        job_id = f"job:{uuid.uuid4().hex[:12]}"
+        # Create truly unique job ID with timestamp to avoid collisions
+        job_id = f"job:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
         # Store job status
         job_data = {

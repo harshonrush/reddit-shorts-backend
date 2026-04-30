@@ -21,4 +21,5 @@ def upload_video_bytes(video_bytes: bytes, user_id: str, job_id: str) -> str:
 
     public_url = supabase.storage.from_("videos").get_public_url(file_path)
 
-    return public_url
+    # Clean URL - remove trailing ?
+    return public_url.rstrip("?")

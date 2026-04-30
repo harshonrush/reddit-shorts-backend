@@ -105,9 +105,13 @@ def safe_filename(text):
 def process_video_job(job_id: str, script: str, user_id: str):
     """RQ job: Process video generation via RunPod and update status."""
     try:
-        # Update status to processing
-        job_data = json.loads(safe_redis_get(job_id) or '{}')
-        job_data["status"] = "processing"
+        # SAFE: Always create fresh object, never merge corrupted state
+        job_data = {
+            "status": "processing",
+            "script": script,
+            "user_id": user_id,
+            "created_at": datetime.utcnow().isoformat()
+        }
         safe_redis_set(job_id, json.dumps(job_data), ex=3600)
 
         # Step 1: Trigger RunPod job (async)
@@ -154,7 +158,7 @@ def process_video_job(job_id: str, script: str, user_id: str):
         if not output:
             raise Exception("RunPod polling timeout")
 
-        # Step 3: Process successful result
+        # Step 3: Process successful result (fresh object)
         if output.get("status") == "success":
             import base64
             video_base64 = output.get("video")
@@ -165,8 +169,14 @@ def process_video_job(job_id: str, script: str, user_id: str):
                 with open(output_path, "wb") as f:
                     f.write(video_bytes)
 
-                job_data["status"] = "completed"
-                job_data["video_url"] = f"/assets/output/{user_id}/video_{job_id}.mp4"
+                # FRESH object - never merge
+                job_data = {
+                    "status": "completed",
+                    "script": script,
+                    "user_id": user_id,
+                    "video_url": f"/assets/output/{user_id}/video_{job_id}.mp4",
+                    "completed_at": datetime.utcnow().isoformat()
+                }
                 safe_redis_set(job_id, json.dumps(job_data), ex=3600)
                 print(f"[JOB {job_id}] Video completed: {output_path}")
             else:
@@ -176,9 +186,14 @@ def process_video_job(job_id: str, script: str, user_id: str):
 
     except Exception as e:
         print(f"[JOB {job_id}] Error: {e}")
-        job_data = json.loads(safe_redis_get(job_id) or '{}')
-        job_data["status"] = "failed"
-        job_data["error"] = str(e)[:200]
+        # FRESH object on error
+        job_data = {
+            "status": "failed",
+            "script": script,
+            "user_id": user_id,
+            "error": str(e)[:200],
+            "failed_at": datetime.utcnow().isoformat()
+        }
         safe_redis_set(job_id, json.dumps(job_data), ex=3600)
 
 
@@ -240,11 +255,20 @@ async def get_job_status(job_id: str):
     """Check video generation status."""
     try:
         # Get job data from Redis
-        job_data_raw = safe_redis_get(job_id)
-        if not job_data_raw:
+        raw = safe_redis_get(job_id)
+        if not raw:
             raise HTTPException(status_code=404, detail="Job not found")
 
-        job_data = json.loads(job_data_raw)
+        # SAFE: Handle corrupted JSON
+        try:
+            job_data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            print(f"[REDIS CORRUPTION] raw value: {raw[:100]}...")
+            return JobStatusResponse(
+                job_id=job_id,
+                status="failed",
+                error="Corrupted job data"
+            )
 
         return JobStatusResponse(
             job_id=job_id,

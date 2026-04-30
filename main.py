@@ -36,12 +36,14 @@ from db import supabase
 
 app = FastAPI(title="Reddit Reels API")
 
-# Output directory for generated videos (absolute path for stability)
-OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets", "output"))
+# Unified path for saving and serving videos
+BASE_DIR = "/app/assets"
+OUTPUT_DIR = os.path.join(BASE_DIR, "output")
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Mount static files for serving videos
-app.mount("/assets", StaticFiles(directory=os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets"))), name="assets")
+app.mount("/assets", StaticFiles(directory=BASE_DIR), name="assets")
 
 # Include auth routes
 app.include_router(auth_router)
@@ -172,6 +174,8 @@ def process_video_job(job_id: str, script: str, user_id: str):
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
                 with open(output_path, "wb") as f:
                     f.write(video_bytes)
+
+                print(f"[FILE SAVED] {output_path} exists: {os.path.exists(output_path)}")
 
                 # FRESH object - atomic write
                 job_data = {

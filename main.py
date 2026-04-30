@@ -5,10 +5,12 @@ import traceback
 import requests
 import uuid
 import json
+import time
 from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
 
@@ -33,6 +35,13 @@ from rq import Retry
 from db import supabase
 
 app = FastAPI(title="Reddit Reels API")
+
+# Output directory for generated videos
+OUTPUT_DIR = "/app/assets/output"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Mount static files for serving videos
+app.mount("/assets", StaticFiles(directory="/app/assets"), name="assets")
 
 # Include auth routes
 app.include_router(auth_router)
@@ -101,21 +110,52 @@ def process_video_job(job_id: str, script: str, user_id: str):
         job_data["status"] = "processing"
         safe_redis_set(job_id, json.dumps(job_data), ex=3600)
 
-        # Call RunPod with script as topic
+        # Step 1: Trigger RunPod job (async)
+        print(f"[JOB {job_id}] Triggering RunPod job...")
         res = requests.post(
             RUNPOD_URL,
             headers={"Authorization": f"Bearer {RUNPOD_API_KEY}"},
-            json={"input": {"topic": script[:100]}},  # Use script as topic
-            timeout=300
+            json={"input": {"topic": script[:100]}},
+            timeout=60
         )
 
         result = res.json()
-        print(f"[JOB {job_id}] RunPod response: {result}")
-        output = result.get("output", {})
-        print(f"[JOB {job_id}] Extracted output: {output}")
+        print(f"[JOB {job_id}] RunPod trigger response: {result}")
 
+        runpod_job_id = result.get("id")
+        if not runpod_job_id:
+            raise Exception(f"RunPod didn't return job id: {result}")
+
+        # Step 2: Poll for completion (max 60 attempts = ~2 min)
+        status_url = f"{RUNPOD_URL}/{runpod_job_id}"
+        output = None
+
+        for attempt in range(60):
+            time.sleep(2)
+
+            status_res = requests.get(
+                status_url,
+                headers={"Authorization": f"Bearer {RUNPOD_API_KEY}"},
+                timeout=30
+            )
+            status_data = status_res.json()
+
+            runpod_status = status_data.get("status")
+            print(f"[JOB {job_id}] Poll {attempt+1}/60: {runpod_status}")
+
+            if runpod_status == "COMPLETED":
+                output = status_data.get("output", {})
+                print(f"[JOB {job_id}] RunPod completed, output: {output}")
+                break
+
+            elif runpod_status in ["FAILED", "CANCELLED", "TIMED_OUT"]:
+                raise Exception(f"RunPod job {runpod_status}: {status_data}")
+
+        if not output:
+            raise Exception("RunPod polling timeout")
+
+        # Step 3: Process successful result
         if output.get("status") == "success":
-            # Decode base64 video
             import base64
             video_base64 = output.get("video")
             if video_base64:
@@ -125,20 +165,14 @@ def process_video_job(job_id: str, script: str, user_id: str):
                 with open(output_path, "wb") as f:
                     f.write(video_bytes)
 
-                # Update job as completed
                 job_data["status"] = "completed"
                 job_data["video_url"] = f"/assets/output/{user_id}/video_{job_id}.mp4"
                 safe_redis_set(job_id, json.dumps(job_data), ex=3600)
                 print(f"[JOB {job_id}] Video completed: {output_path}")
             else:
-                job_data["status"] = "failed"
-                job_data["error"] = "No video data"
-                safe_redis_set(job_id, json.dumps(job_data), ex=3600)
+                raise Exception("No video data in RunPod output")
         else:
-            print(f"[JOB {job_id}] RunPod returned non-success status: {output.get('status')}")
-            job_data["status"] = "failed"
-            job_data["error"] = output.get("message", f"RunPod failed: {output}")
-            safe_redis_set(job_id, json.dumps(job_data), ex=3600)
+            raise Exception(f"RunPod handler failed: {output}")
 
     except Exception as e:
         print(f"[JOB {job_id}] Error: {e}")

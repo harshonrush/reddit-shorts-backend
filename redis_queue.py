@@ -1,5 +1,6 @@
 # redis_queue.py - Redis Queue configuration
 import os
+import json
 import redis
 from rq import Queue
 
@@ -18,19 +19,18 @@ video_queue = Queue(
 )
 
 
-def safe_redis_get(key: str):
-    """Safely get from Redis with error handling."""
-    try:
-        return redis_conn.get(key)
-    except Exception as e:
-        print(f"[REDIS ERROR] Failed to get {key}: {e}")
+def safe_redis_set(key, value, ex=None):
+    """Safely set to Redis - handles JSON serialization internally."""
+    if not isinstance(value, str):
+        value = json.dumps(value)
+    redis_conn.set(key, value, ex=ex)
+
+
+def safe_redis_get(key):
+    """Safely get from Redis - returns decoded string."""
+    val = redis_conn.get(key)
+    if val is None:
         return None
-
-
-def safe_redis_set(key: str, value, ex=None):
-    """Safely set to Redis with error handling."""
-    try:
-        return redis_conn.set(key, value, ex=ex)
-    except Exception as e:
-        print(f"[REDIS ERROR] Failed to set {key}: {e}")
-        return False
+    if isinstance(val, bytes):
+        val = val.decode("utf-8")
+    return val

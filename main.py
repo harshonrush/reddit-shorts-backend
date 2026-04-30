@@ -113,7 +113,7 @@ def process_video_job(job_id: str, script: str, user_id: str):
             "created_at": datetime.utcnow().isoformat()
         }
         redis_conn.delete(job_id)
-        redis_conn.set(job_id, json.dumps(job_data), ex=3600)
+        safe_redis_set(job_id, job_data, ex=3600)
 
         # Step 1: Trigger RunPod job (async)
         print(f"[JOB {job_id}] Triggering RunPod job...")
@@ -179,7 +179,7 @@ def process_video_job(job_id: str, script: str, user_id: str):
                     "completed_at": datetime.utcnow().isoformat()
                 }
                 redis_conn.delete(job_id)
-                redis_conn.set(job_id, json.dumps(job_data), ex=3600)
+                safe_redis_set(job_id, job_data, ex=3600)
                 print(f"[JOB {job_id}] Video completed: {output_path}")
             else:
                 raise Exception("No video data in RunPod output")
@@ -197,7 +197,7 @@ def process_video_job(job_id: str, script: str, user_id: str):
             "failed_at": datetime.utcnow().isoformat()
         }
         redis_conn.delete(job_id)
-        redis_conn.set(job_id, json.dumps(job_data), ex=3600)
+        safe_redis_set(job_id, job_data, ex=3600)
 
 
 @app.post("/generate-script", response_model=ScriptResponse)
@@ -238,7 +238,7 @@ async def generate_video_job(request: VideoJobRequest):
             "created_at": datetime.utcnow().isoformat()
         }
         redis_conn.delete(job_id)
-        redis_conn.set(job_id, json.dumps(job_data), ex=3600)
+        safe_redis_set(job_id, job_data, ex=3600)
 
         # Enqueue job to RQ
         video_queue.enqueue(
@@ -261,6 +261,7 @@ async def get_job_status(job_id: str):
     try:
         # Get job data from Redis
         raw = safe_redis_get(job_id)
+        print(f"[DEBUG RAW REDIS] {repr(raw)}")
         if not raw:
             raise HTTPException(status_code=404, detail="Job not found")
 

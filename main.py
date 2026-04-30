@@ -3,6 +3,9 @@ import tempfile
 import re
 import traceback
 import requests
+import uuid
+import json
+from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,14 +62,169 @@ class UploadRequest(BaseModel):
     description: str = "#shorts #reddit #story"
 
 
+class ScriptRequest(BaseModel):
+    idea: str
+    user_id: str = "default"
+
+
+class ScriptResponse(BaseModel):
+    script: str
+    script_id: str
+
+
+class VideoJobRequest(BaseModel):
+    script: str
+    user_id: str = "default"
+
+
+class VideoJobResponse(BaseModel):
+    job_id: str
+    status: str = "queued"
+
+
+class JobStatusResponse(BaseModel):
+    job_id: str
+    status: str  # "queued" | "processing" | "completed" | "failed"
+    video_url: str | None = None
+    error: str | None = None
+
+
 def safe_filename(text):
     return re.sub(r'[^a-zA-Z0-9_-]', '_', text)[:20]
 
 
-@app.post("/generate")
-async def generate_video(request: GenerateRequest):
-    """Call RunPod to generate video - no local rendering."""
+def process_video_job(job_id: str, script: str, user_id: str):
+    """RQ job: Process video generation via RunPod and update status."""
+    try:
+        # Update status to processing
+        job_data = json.loads(safe_redis_get(job_id) or '{}')
+        job_data["status"] = "processing"
+        safe_redis_set(job_id, json.dumps(job_data), ex=3600)
+
+        # Call RunPod with script as topic
+        res = requests.post(
+            RUNPOD_URL,
+            headers={"Authorization": f"Bearer {RUNPOD_API_KEY}"},
+            json={"input": {"topic": script[:100]}},  # Use script as topic
+            timeout=300
+        )
+
+        result = res.json()
+        output = result.get("output", {})
+
+        if output.get("status") == "success":
+            # Decode base64 video
+            import base64
+            video_base64 = output.get("video")
+            if video_base64:
+                video_bytes = base64.b64decode(video_base64)
+                output_path = os.path.join(OUTPUT_DIR, user_id, f"video_{job_id}.mp4")
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                with open(output_path, "wb") as f:
+                    f.write(video_bytes)
+
+                # Update job as completed
+                job_data["status"] = "completed"
+                job_data["video_url"] = f"/assets/output/{user_id}/video_{job_id}.mp4"
+                safe_redis_set(job_id, json.dumps(job_data), ex=3600)
+                print(f"[JOB {job_id}] Video completed: {output_path}")
+            else:
+                job_data["status"] = "failed"
+                job_data["error"] = "No video data"
+                safe_redis_set(job_id, json.dumps(job_data), ex=3600)
+        else:
+            job_data["status"] = "failed"
+            job_data["error"] = output.get("message", "RunPod failed")
+            safe_redis_set(job_id, json.dumps(job_data), ex=3600)
+
+    except Exception as e:
+        print(f"[JOB {job_id}] Error: {e}")
+        job_data = json.loads(safe_redis_get(job_id) or '{}')
+        job_data["status"] = "failed"
+        job_data["error"] = str(e)[:200]
+        safe_redis_set(job_id, json.dumps(job_data), ex=3600)
+
+
+@app.post("/generate-script", response_model=ScriptResponse)
+async def generate_script_endpoint(request: ScriptRequest):
+    """Step 1: Generate script from idea (cheap, fast, Railway handles)."""
+    try:
+        # Generate script using Gemini
+        script = generate_script(request.idea)
+
+        # Store script in Redis for 24h
+        script_id = f"script:{uuid.uuid4().hex[:12]}"
+        safe_redis_set(script_id, script, ex=86400)
+
+        return ScriptResponse(script=script, script_id=script_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/generate-video", response_model=VideoJobResponse)
+async def generate_video_job(request: VideoJobRequest):
+    """Step 2: Queue video generation (expensive, async, RunPod GPU)."""
     # Rate limiting
+    cooldown_key = f"cooldown:{request.user_id}"
+    if safe_redis_get(cooldown_key):
+        raise HTTPException(status_code=429, detail="Rate limit: Wait 60 seconds before next video")
+    safe_redis_set(cooldown_key, 1, ex=60)
+
+    try:
+        # Create job ID
+        job_id = f"job:{uuid.uuid4().hex[:12]}"
+
+        # Store job status
+        job_data = {
+            "status": "queued",
+            "script": request.script,
+            "user_id": request.user_id,
+            "created_at": datetime.utcnow().isoformat()
+        }
+        safe_redis_set(job_id, json.dumps(job_data), ex=3600)
+
+        # Enqueue job to RQ
+        video_queue.enqueue(
+            process_video_job,
+            job_id,
+            request.script,
+            request.user_id,
+            retry=Retry(max=3, interval=[10, 30, 60]),
+            job_timeout=600
+        )
+
+        return VideoJobResponse(job_id=job_id, status="queued")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/job-status/{job_id}", response_model=JobStatusResponse)
+async def get_job_status(job_id: str):
+    """Check video generation status."""
+    try:
+        # Get job data from Redis
+        job_data_raw = safe_redis_get(job_id)
+        if not job_data_raw:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        job_data = json.loads(job_data_raw)
+
+        return JobStatusResponse(
+            job_id=job_id,
+            status=job_data.get("status", "unknown"),
+            video_url=job_data.get("video_url"),
+            error=job_data.get("error")
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Legacy endpoint - keep for compatibility
+@app.post("/generate")
+async def generate_video_legacy(request: GenerateRequest):
+    """Legacy: Direct RunPod call (kept for compatibility)."""
     cooldown_key = f"cooldown:{request.user_id}"
     if safe_redis_get(cooldown_key):
         raise HTTPException(status_code=429, detail="Rate limit: Wait 60 seconds")
@@ -76,11 +234,7 @@ async def generate_video(request: GenerateRequest):
         res = requests.post(
             RUNPOD_URL,
             headers={"Authorization": f"Bearer {RUNPOD_API_KEY}"},
-            json={
-                "input": {
-                    "topic": request.topic
-                }
-            },
+            json={"input": {"topic": request.topic}},
             timeout=60
         )
         return res.json()

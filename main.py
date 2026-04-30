@@ -110,7 +110,9 @@ def process_video_job(job_id: str, script: str, user_id: str):
         )
 
         result = res.json()
+        print(f"[JOB {job_id}] RunPod response: {result}")
         output = result.get("output", {})
+        print(f"[JOB {job_id}] Extracted output: {output}")
 
         if output.get("status") == "success":
             # Decode base64 video
@@ -133,8 +135,9 @@ def process_video_job(job_id: str, script: str, user_id: str):
                 job_data["error"] = "No video data"
                 safe_redis_set(job_id, json.dumps(job_data), ex=3600)
         else:
+            print(f"[JOB {job_id}] RunPod returned non-success status: {output.get('status')}")
             job_data["status"] = "failed"
-            job_data["error"] = output.get("message", "RunPod failed")
+            job_data["error"] = output.get("message", f"RunPod failed: {output}")
             safe_redis_set(job_id, json.dumps(job_data), ex=3600)
 
     except Exception as e:

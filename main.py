@@ -105,14 +105,15 @@ def safe_filename(text):
 def process_video_job(job_id: str, script: str, user_id: str):
     """RQ job: Process video generation via RunPod and update status."""
     try:
-        # SAFE: Always create fresh object, never merge corrupted state
+        # SAFE: Always create fresh object + atomic delete-before-set
         job_data = {
             "status": "processing",
             "script": script,
             "user_id": user_id,
             "created_at": datetime.utcnow().isoformat()
         }
-        safe_redis_set(job_id, json.dumps(job_data), ex=3600)
+        redis_conn.delete(job_id)
+        redis_conn.set(job_id, json.dumps(job_data), ex=3600)
 
         # Step 1: Trigger RunPod job (async)
         print(f"[JOB {job_id}] Triggering RunPod job...")
@@ -169,7 +170,7 @@ def process_video_job(job_id: str, script: str, user_id: str):
                 with open(output_path, "wb") as f:
                     f.write(video_bytes)
 
-                # FRESH object - never merge
+                # FRESH object - atomic write
                 job_data = {
                     "status": "completed",
                     "script": script,
@@ -177,7 +178,8 @@ def process_video_job(job_id: str, script: str, user_id: str):
                     "video_url": f"/assets/output/{user_id}/video_{job_id}.mp4",
                     "completed_at": datetime.utcnow().isoformat()
                 }
-                safe_redis_set(job_id, json.dumps(job_data), ex=3600)
+                redis_conn.delete(job_id)
+                redis_conn.set(job_id, json.dumps(job_data), ex=3600)
                 print(f"[JOB {job_id}] Video completed: {output_path}")
             else:
                 raise Exception("No video data in RunPod output")
@@ -186,7 +188,7 @@ def process_video_job(job_id: str, script: str, user_id: str):
 
     except Exception as e:
         print(f"[JOB {job_id}] Error: {e}")
-        # FRESH object on error
+        # FRESH object on error - atomic write
         job_data = {
             "status": "failed",
             "script": script,
@@ -194,7 +196,8 @@ def process_video_job(job_id: str, script: str, user_id: str):
             "error": str(e)[:200],
             "failed_at": datetime.utcnow().isoformat()
         }
-        safe_redis_set(job_id, json.dumps(job_data), ex=3600)
+        redis_conn.delete(job_id)
+        redis_conn.set(job_id, json.dumps(job_data), ex=3600)
 
 
 @app.post("/generate-script", response_model=ScriptResponse)
@@ -223,17 +226,19 @@ async def generate_video_job(request: VideoJobRequest):
     safe_redis_set(cooldown_key, 1, ex=60)
 
     try:
-        # Create truly unique job ID with timestamp to avoid collisions
-        job_id = f"job:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        # Create truly unique job ID (no colons for URL safety)
+        timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+        job_id = f"job_{timestamp}_{uuid.uuid4().hex[:8]}"
 
-        # Store job status
+        # Store job status (atomic: delete first, then set)
         job_data = {
             "status": "queued",
             "script": request.script,
             "user_id": request.user_id,
             "created_at": datetime.utcnow().isoformat()
         }
-        safe_redis_set(job_id, json.dumps(job_data), ex=3600)
+        redis_conn.delete(job_id)
+        redis_conn.set(job_id, json.dumps(job_data), ex=3600)
 
         # Enqueue job to RQ
         video_queue.enqueue(

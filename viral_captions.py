@@ -94,10 +94,10 @@ def generate_viral_captions_ffmpeg(
         "-stream_loop", "-1",  # Loop video infinitely to match audio
         "-i", video_path,
         "-i", audio_path,
-        "-vf", f"subtitles='{srt_path_escaped}':force_style='FontSize=56,FontName=DejaVu Sans,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=5,Alignment=2,MarginV=100'",
         "-map", "0:v",
         "-map", "1:a",
-        "-c:v", "libx264", "-preset", "fast",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "30",
+        "-vf", f"subtitles='{srt_path_escaped}':force_style='FontSize=56,FontName=DejaVu Sans,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=5,Alignment=2,MarginV=100',scale=360:640",
         "-c:a", "aac",
         "-shortest",  # Stop when shortest input (audio) ends
         output_path

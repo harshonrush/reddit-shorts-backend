@@ -2,13 +2,13 @@ import runpod
 import sys
 import tempfile
 import os
-import base64
 
 from script_engine import generate_script
 from tts import generate_audio
 from video_fetcher import fetch_video
 from subtitle import get_word_timestamps  # Deepgram transcription only
 from viral_captions import generate_animated_captions  # FFmpeg viral captions
+from storage import upload_video_bytes  # Direct upload to Supabase
 
 
 def handler(job):
@@ -43,16 +43,19 @@ def handler(job):
 
         print("[RUNPOD] Video rendered successfully", file=sys.stderr)
 
-        # Read and encode video to base64
+        # Read video and upload directly to Supabase Storage
         with open(output_path, "rb") as f:
             video_bytes = f.read()
-        video_base64 = base64.b64encode(video_bytes).decode("utf-8")
+        
+        user_id = job["input"].get("user_id", "anonymous")
+        job_id = job["id"]
+        video_url = upload_video_bytes(video_bytes, user_id, job_id)
 
-        print(f"[RUNPOD] Video encoded to base64 ({len(video_base64)} chars)", file=sys.stderr)
+        print(f"[RUNPOD] Video uploaded: {video_url}", file=sys.stderr)
 
         return {
             "status": "success",
-            "video": video_base64
+            "video_url": video_url
         }
 
     except Exception as e:

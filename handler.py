@@ -55,7 +55,9 @@ def handler(job):
         print(f"FINAL OUTPUT: {video_url}", file=sys.stderr)
 
         return {
-            "video_url": video_url
+            "output": {
+                "video_url": video_url
+            }
         }
 
     except Exception as e:

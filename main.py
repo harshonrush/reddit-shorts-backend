@@ -161,25 +161,23 @@ def process_video_job(job_id: str, script: str, user_id: str):
             raise Exception("RunPod polling timeout")
 
         # Step 3: Process successful result (fresh object)
-        if output.get("status") == "success":
-            # RunPod now returns video_url directly (no base64)
-            video_url = output.get("video_url")
-            if video_url:
-                # FRESH object - atomic write
-                job_data = {
-                    "status": "completed",
-                    "script": script,
-                    "user_id": user_id,
-                    "video_url": video_url,
-                    "completed_at": datetime.utcnow().isoformat()
-                }
-                redis_conn.delete(job_id)
-                safe_redis_set(job_id, job_data, ex=3600)
-                print(f"[JOB {job_id}] Video ready: {video_url}")
-            else:
-                raise Exception("No video_url in RunPod output")
+        # RunPod returns: {"output": {"video_url": "..."}}
+        runpod_output = output.get("output", {})
+        video_url = runpod_output.get("video_url")
+        if video_url:
+            # FRESH object - atomic write
+            job_data = {
+                "status": "completed",
+                "script": script,
+                "user_id": user_id,
+                "video_url": video_url,
+                "completed_at": datetime.utcnow().isoformat()
+            }
+            redis_conn.delete(job_id)
+            safe_redis_set(job_id, job_data, ex=3600)
+            print(f"[JOB {job_id}] Video ready: {video_url}")
         else:
-            raise Exception(f"RunPod handler failed: {output}")
+            raise Exception("No video_url in RunPod output")
 
     except Exception as e:
         print(f"[JOB {job_id}] Error: {e}")

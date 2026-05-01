@@ -13,6 +13,13 @@ def escape_text(text: str) -> str:
             .replace("'", "\\'")
             .replace(",", "\\,")
             .replace("%", "\\%")
+            .replace(" ", "\\ ")
+            .replace("=", "\\=")
+            .replace("[", "\\[")
+            .replace("]", "\\]")
+            .replace("{", "\\{")
+            .replace("}", "\\}")
+            .replace(";", "\\;")
             .replace("\n", " ")
     )
 
@@ -85,7 +92,7 @@ def generate_viral_captions_ffmpeg(
         # Font: Arial Bold, 80pt, white with black stroke
         drawtext = (
             f"drawtext=fontfile=/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf:"
-            f"text='{safe_text}':"
+            f"text={safe_text}:"
             f"fontsize=80:"
             f"fontcolor=white:"
             f"borderw=4:bordercolor=black:"
@@ -174,7 +181,7 @@ def generate_animated_captions(
         # Base text (all words visible, but smaller/inactive)
         base_filter = (
             f"drawtext=fontfile=/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf:"
-            f"text='{safe_line_text}':"
+            f"text={safe_line_text}:"
             f"fontsize=72:"
             f"fontcolor=gray@0.6:"
             f"borderw=3:bordercolor=black@0.8:"
@@ -199,7 +206,7 @@ def generate_animated_captions(
             # Highlight: larger fixed fontsize (no animation to avoid FFmpeg parsing issues)
             highlight_filter = (
                 f"drawtext=fontfile=/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf:"
-                f"text='{safe_word}':"
+                f"text={safe_word}:"
                 f"fontsize=84:"
                 f"fontcolor=yellow:"
                 f"borderw=4:bordercolor=black:"

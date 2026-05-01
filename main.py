@@ -108,10 +108,12 @@ def process_video_job(job_id: str, script: str, user_id: str):
 
         # Step 1: Trigger RunPod job (async)
         print(f"[JOB {job_id}] Triggering RunPod job...")
+        print(f"[JOB {job_id}] Sending script to RunPod: {repr(script[:100])}...")
+        payload = {"input": {"script": script}}
         res = requests.post(
             RUNPOD_URL,
             headers={"Authorization": f"Bearer {RUNPOD_API_KEY}"},
-            json={"input": {"script": script}},  # Send full script, not topic
+            json=payload,
             timeout=60
         )
         res.raise_for_status()
@@ -209,6 +211,7 @@ async def generate_script_endpoint(request: ScriptRequest):
         script_id = f"script:{uuid.uuid4().hex[:12]}"
         safe_redis_set(script_id, script, ex=86400)
 
+        print(f"[SCRIPT] Generated script: {repr(script[:100])}...", file=sys.stderr)
         return ScriptResponse(script=script, script_id=script_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

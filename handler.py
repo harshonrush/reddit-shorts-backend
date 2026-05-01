@@ -7,8 +7,8 @@ import base64
 from script_engine import generate_script
 from tts import generate_audio
 from video_fetcher import fetch_video
-from subtitle_ass import generate_ass
-from renderer import render_video
+from subtitle import get_word_timestamps  # Deepgram transcription only
+from viral_captions import generate_animated_captions  # FFmpeg viral captions
 
 
 def handler(job):
@@ -25,17 +25,21 @@ def handler(job):
         else:
             print(f"[RUNPOD] Using provided script: {script[:50]}...", file=sys.stderr)
 
-        # 3. Temp files
-        audio_path = tempfile.mktemp(suffix=".mp3")
-        video_path = tempfile.mktemp(suffix=".mp4")
-        ass_path = tempfile.mktemp(suffix=".ass")
-        output_path = tempfile.mktemp(suffix=".mp4")
+        # 3. Temp files (secure)
+        audio_path = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False).name
+        video_path = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+        output_path = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
 
         # 4. Pipeline
         generate_audio(script, audio_path)
         fetch_video(video_path)
-        generate_ass(script, audio_path, ass_path)
-        render_video(audio_path, video_path, ass_path, output_path)
+        
+        # 5. Get word timestamps from Deepgram
+        words = get_word_timestamps(audio_path)
+        print(f"[RUNPOD] Got {len(words)} words for captions", file=sys.stderr)
+        
+        # 6. Generate viral captions with FFmpeg (big text + zoom effects)
+        generate_animated_captions(video_path, audio_path, words, output_path)
 
         print("[RUNPOD] Video rendered successfully", file=sys.stderr)
 

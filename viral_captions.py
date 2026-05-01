@@ -6,8 +6,15 @@ from typing import List, Dict
 
 
 def escape_text(text: str) -> str:
-    """Escape special characters for FFmpeg drawtext filter."""
-    return text.replace("'", "\\'").replace(":", "\\:").replace(",", "\\,").replace("\\", "\\\\")
+    """Escape text for FFmpeg drawtext."""
+    return (
+        text.replace("\\", "\\\\")
+            .replace(":", "\\:")
+            .replace("'", "\\'")
+            .replace(",", "\\,")
+            .replace("%", "\\%")
+            .replace("\n", " ")
+    )
 
 
 def generate_viral_captions_ffmpeg(
@@ -77,7 +84,7 @@ def generate_viral_captions_ffmpeg(
         # Drawtext filter with big bold styling
         # Font: Arial Bold, 80pt, white with black stroke
         drawtext = (
-            f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+            f"drawtext=fontfile=/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf:"
             f"text='{safe_text}':"
             f"fontsize=80:"
             f"fontcolor=white:"
@@ -109,7 +116,7 @@ def generate_viral_captions_ffmpeg(
     result = subprocess.run(cmd, capture_output=True, text=True)
     
     if result.returncode != 0:
-        print(f"[FFMPEG ERROR] {result.stderr}", file=sys.stderr)
+        print(f"[FFMPEG ERROR FULL]\n{result.stderr}", file=sys.stderr)
         raise RuntimeError(f"FFmpeg failed: {result.stderr}")
     
     print(f"[FFMPEG] Viral captions added: {output_path}", file=sys.stderr)
@@ -166,7 +173,7 @@ def generate_animated_captions(
         
         # Base text (all words visible, but smaller/inactive)
         base_filter = (
-            f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+            f"drawtext=fontfile=/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf:"
             f"text='{safe_line_text}':"
             f"fontsize=72:"
             f"fontcolor=gray@0.6:"
@@ -189,11 +196,11 @@ def generate_animated_captions(
             # Escape word text for FFmpeg
             safe_word = escape_text(word['word'])
             
-            # Zoom effect: scale from 1.0 to 1.3 and back
+            # Highlight: larger fixed fontsize (no animation to avoid FFmpeg parsing issues)
             highlight_filter = (
-                f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+                f"drawtext=fontfile=/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf:"
                 f"text='{safe_word}':"
-                f"fontsize='72+12*sin((t-{word_start})*10)':"
+                f"fontsize=84:"
                 f"fontcolor=yellow:"
                 f"borderw=4:bordercolor=black:"
                 f"x=(w-text_w)/2+{prefix_width}:y={y_pos}:"
@@ -223,7 +230,7 @@ def generate_animated_captions(
     result = subprocess.run(cmd, capture_output=True, text=True)
     
     if result.returncode != 0:
-        print(f"[FFMPEG ERROR] {result.stderr}", file=sys.stderr)
+        print(f"[FFMPEG ERROR FULL]\n{result.stderr}", file=sys.stderr)
         raise RuntimeError(f"FFmpeg failed: {result.stderr}")
     
     print(f"[FFMPEG] Animated captions complete: {output_path}", file=sys.stderr)

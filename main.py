@@ -111,7 +111,7 @@ def process_video_job(job_id: str, script: str, user_id: str):
         res = requests.post(
             RUNPOD_URL,
             headers={"Authorization": f"Bearer {RUNPOD_API_KEY}"},
-            json={"input": {"topic": script[:100]}},
+            json={"input": {"script": script}},  # Send full script, not topic
             timeout=60
         )
         res.raise_for_status()

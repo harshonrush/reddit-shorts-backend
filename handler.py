@@ -16,10 +16,14 @@ def handler(job):
     try:
         print("[RUNPOD] Job received", file=sys.stderr)
 
-        topic = job["input"].get("topic", "success mindset")
-
-        # Generate script directly from topic
-        script = generate_script(topic)
+        # Use provided script directly, or generate from topic if not provided
+        script = job["input"].get("script")
+        if not script:
+            topic = job["input"].get("topic", "success mindset")
+            script = generate_script(topic)
+            print(f"[RUNPOD] Generated script from topic: {topic}", file=sys.stderr)
+        else:
+            print(f"[RUNPOD] Using provided script: {script[:50]}...", file=sys.stderr)
 
         # 3. Temp files
         audio_path = tempfile.mktemp(suffix=".mp3")

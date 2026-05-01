@@ -1,12 +1,11 @@
 import os
-from elevenlabs import generate, save, set_api_key
+from elevenlabs.client import ElevenLabs
 
-# Initialize ElevenLabs API
-set_api_key(os.getenv("ELEVENLABS_API_KEY"))
+client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 
 
 def generate_audio(text: str, output_path: str) -> str:
-    """Convert script text to speech using ElevenLabs (single API call for speed).
+    """Generate TTS using ElevenLabs (NEW SDK).
     
     Args:
         text: The script text to convert
@@ -19,17 +18,19 @@ def generate_audio(text: str, output_path: str) -> str:
     clean_text = text.replace("HOOK:", "").replace("SCRIPT:", "")
     clean_text = " ".join(clean_text.split())
     
-    print(f"[ELEVENLABS] Generating audio (single call)...", file=os.sys.stderr)
-    
-    # Generate audio in single call (faster, cheaper)
-    audio = generate(
-        text=clean_text,
-        voice="Adam",  # or Rachel, Antoni, etc.
-        model="eleven_multilingual_v2"
+    print(f"[ELEVENLABS] Generating audio...", file=os.sys.stderr)
+
+    # NEW SDK: client.text_to_speech.convert (streaming)
+    audio = client.text_to_speech.convert(
+        voice_id="pNInz6obpgDQGcFmaJgB",  # Adam voice
+        model_id="eleven_multilingual_v2",
+        text=clean_text
     )
-    
-    save(audio, output_path)
-    
+
+    # Save streamed audio
+    with open(output_path, "wb") as f:
+        for chunk in audio:
+            f.write(chunk)
+
     print(f"[ELEVENLABS] Audio saved to {output_path}", file=os.sys.stderr)
-    
     return output_path

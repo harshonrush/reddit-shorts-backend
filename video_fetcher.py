@@ -4,8 +4,8 @@ import requests
 
 SAMPLE_VIDEO = os.path.join("..", "assets", "sample.mp4")
 
-# Public domain sample video URL (fallback)
-SAMPLE_VIDEO_URL = "https://samplelib.com/lib/preview/mp4/sample-5s.mp4"
+# Public domain sample video URL (30 seconds, 720p)
+SAMPLE_VIDEO_URL = "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/6150661-uhd_2160_4096_25fps.mp4"
 
 
 def fetch_video(output_path: str, query: str = None) -> str:
@@ -43,7 +43,7 @@ def fetch_video(output_path: str, query: str = None) -> str:
         return create_blank_video(output_path)
 
 
-def create_blank_video(output_path: str, duration: int = 5) -> str:
+def create_blank_video(output_path: str, duration: int = 60) -> str:
     """Create a blank colored video using ffmpeg as last resort."""
     import subprocess
     

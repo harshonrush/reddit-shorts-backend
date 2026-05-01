@@ -52,9 +52,9 @@ def handler(job):
         video_url = upload_video_bytes(video_bytes, user_id, job_id)
 
         print(f"[RUNPOD] Video uploaded: {video_url}", file=sys.stderr)
+        print(f"FINAL OUTPUT: {video_url}", file=sys.stderr)
 
         return {
-            "status": "success",
             "video_url": video_url
         }
 

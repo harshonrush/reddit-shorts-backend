@@ -34,7 +34,6 @@ from scheduler import update_schedule, load_settings, save_settings, daily_job
 from redis_queue import video_queue, redis_conn, safe_redis_get, safe_redis_set
 from rq import Retry
 from db import supabase
-from storage import upload_video_bytes
 
 app = FastAPI(title="Reddit Reels API")
 
@@ -163,14 +162,9 @@ def process_video_job(job_id: str, script: str, user_id: str):
 
         # Step 3: Process successful result (fresh object)
         if output.get("status") == "success":
-            import base64
-            video_base64 = output.get("video")
-            if video_base64:
-                video_bytes = base64.b64decode(video_base64)
-
-                # Upload to Supabase Storage
-                video_url = upload_video_bytes(video_bytes, user_id, job_id)
-
+            # RunPod now returns video_url directly (no base64)
+            video_url = output.get("video_url")
+            if video_url:
                 # FRESH object - atomic write
                 job_data = {
                     "status": "completed",
@@ -181,9 +175,9 @@ def process_video_job(job_id: str, script: str, user_id: str):
                 }
                 redis_conn.delete(job_id)
                 safe_redis_set(job_id, job_data, ex=3600)
-                print(f"[JOB {job_id}] Uploaded to Supabase: {video_url}")
+                print(f"[JOB {job_id}] Video ready: {video_url}")
             else:
-                raise Exception("No video data in RunPod output")
+                raise Exception("No video_url in RunPod output")
         else:
             raise Exception(f"RunPod handler failed: {output}")
 

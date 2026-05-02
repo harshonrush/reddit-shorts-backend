@@ -4,8 +4,6 @@ import os
 import logging
 import time
 import requests
-import base64
-import tempfile
 from datetime import datetime
 
 # RunPod Serverless Configuration
@@ -66,20 +64,13 @@ def poll_runpod_status(job_id: str, user_id: str, max_wait: int = 600) -> dict:
 
             if status == "COMPLETED":
                 output = status_data.get("output", {})
-                if output.get("status") == "success":
-                    # Decode base64 video and save to temp file
-                    video_base64 = output.get("video")
-                    if video_base64:
-                        video_bytes = base64.b64decode(video_base64)
-                        output_path = tempfile.mktemp(suffix=".mp4")
-                        with open(output_path, "wb") as f:
-                            f.write(video_bytes)
-                        print(f"[RUNPOD] Video saved to {output_path}")
-                        return {"success": True, "video_path": output_path}
-                    else:
-                        return {"success": False, "error": "No video data in response"}
+                # RunPod returns: {"output": {"video_url": "..."}}
+                runpod_data = output.get("output", {})
+                video_url = runpod_data.get("video_url")
+                if video_url:
+                    print(f"[RUNPOD] Video ready at {video_url}")
+                    return {"success": True, "video_url": video_url}
                 else:
-                    # RunPod job failed
                     error_msg = output.get("message", "Unknown error")
                     print(f"[RUNPOD] Job {job_id} failed: {error_msg}")
                     return {"success": False, "error": error_msg}
@@ -238,13 +229,13 @@ def daily_job(user_id: str, token_data: dict = None):
             poll_result = poll_runpod_status(job_id, user_id, max_wait=600)
 
             if poll_result.get("success"):
-                video_path = poll_result.get("video_path")
-                print(f"[RUNPOD] Video ready at {video_path}")
+                video_url = poll_result.get("video_url")
+                print(f"[RUNPOD] Video ready at {video_url}")
 
                 # Upload to YouTube using user's token
                 from uploader import upload_video
                 res = upload_video(
-                    file_path=video_path,
+                    video_url=video_url,
                     title=f"{topic.title()} Story",
                     description=f"#{niche} #shorts #viral",
                     token_data=token_data

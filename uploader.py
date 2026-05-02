@@ -4,6 +4,8 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from datetime import datetime, timedelta
 import os
+import tempfile
+import requests
 from db import supabase
 
 
@@ -70,11 +72,12 @@ def load_credentials_from_supabase(user_id: str) -> Credentials:
     return creds
 
 
-def upload_video(file_path: str, title: str, description: str = "", tags: list = None, user_id: str = "default", token_data: dict = None) -> dict:
+def upload_video(video_url: str = None, file_path: str = None, title: str = "", description: str = "", tags: list = None, user_id: str = "default", token_data: dict = None) -> dict:
     """Upload video to YouTube using OAuth token.
     
     Args:
-        file_path: Path to video file
+        video_url: URL to video file (downloaded before upload)
+        file_path: Path to local video file (alternative to URL)
         title: Video title
         description: Video description
         tags: List of tags (optional)
@@ -84,6 +87,23 @@ def upload_video(file_path: str, title: str, description: str = "", tags: list =
     Returns:
         YouTube API response with video ID
     """
+    # Download video from URL if provided
+    downloaded = False
+    if video_url and not file_path:
+        print(f"[UPLOADER] Downloading video from {video_url}...")
+        temp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        response = requests.get(video_url, stream=True, timeout=120)
+        response.raise_for_status()
+        for chunk in response.iter_content(chunk_size=8192):
+            temp_file.write(chunk)
+        temp_file.close()
+        file_path = temp_file.name
+        downloaded = True
+        print(f"[UPLOADER] Video downloaded to {file_path}")
+    
+    if not file_path:
+        raise ValueError("Either video_url or file_path must be provided")
+    
     print("[UPLOADER] STEP 1: Loading credentials...")
     if token_data:
         # Use pre-fetched token (saves DB query)
@@ -131,7 +151,16 @@ def upload_video(file_path: str, title: str, description: str = "", tags: list =
     )
 
     print("[UPLOADER] STEP 4: Sending to YouTube API...")
-    response = request.execute()
-    print(f"[UPLOADER] STEP 5: Upload response received: {response}")
-    print(f"✅ Uploaded to YouTube: https://youtube.com/watch?v={response['id']}")
-    return response
+    try:
+        response = request.execute()
+        print(f"[UPLOADER] STEP 5: Upload response received: {response}")
+        print(f"✅ Uploaded to YouTube: https://youtube.com/watch?v={response['id']}")
+        return response
+    finally:
+        # Cleanup temp file if we downloaded it
+        if downloaded and file_path and os.path.exists(file_path):
+            try:
+                os.unlink(file_path)
+                print(f"[UPLOADER] Cleaned up temp file: {file_path}")
+            except Exception as e:
+                print(f"[UPLOADER] Failed to cleanup temp file: {e}")

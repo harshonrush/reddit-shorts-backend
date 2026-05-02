@@ -23,7 +23,7 @@ def generate_audio(text: str, output_path: str) -> str:
     # NEW SDK: client.text_to_speech.convert (streaming)
     audio = client.text_to_speech.convert(
         voice_id="pNInz6obpgDQGcFmaJgB",  # Adam voice
-        model_id="eleven_multilingual_v2",
+        model_id="eleven_flash_v2.5",
         text=clean_text
     )
 

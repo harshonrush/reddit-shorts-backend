@@ -77,46 +77,78 @@ def connect(user_id: str = Query(None)):
 # 🔹 STEP 2: CALLBACK
 @router.get("/auth/callback")
 def callback(code: str, state: str):
+    print(f"[AUTH CALLBACK] Received callback with state={state[:20]}... code={code[:20]}...")
+    
+    # Check client config
+    if not client_config:
+        print("[AUTH ERROR] GOOGLE_CLIENT_SECRET not configured")
+        return {"error": "Server configuration error: GOOGLE_CLIENT_SECRET not set"}
 
     if not os.path.exists(STATE_FILE):
+        print("[AUTH ERROR] State file missing")
         return {"error": "State missing. Restart auth."}
 
-    saved_data = json.load(open(STATE_FILE))
-    saved_state = saved_data["state"]
+    try:
+        saved_data = json.load(open(STATE_FILE))
+    except Exception as e:
+        print(f"[AUTH ERROR] Failed to load state file: {e}")
+        return {"error": f"Failed to load state: {str(e)}"}
+        
+    saved_state = saved_data.get("state")
     code_verifier = saved_data.get("code_verifier")
     user_id = saved_data.get("user_id", "default")
+    
+    print(f"[AUTH CALLBACK] Saved state={saved_state[:20] if saved_state else None}... user_id={user_id}")
 
     if state != saved_state:
-        return {"error": "State mismatch"}
+        print(f"[AUTH ERROR] State mismatch: received={state[:20]}... vs saved={saved_state[:20] if saved_state else None}...")
+        return {"error": "State mismatch - possible CSRF attack"}
 
-    flow = Flow.from_client_config(
-        client_config,
-        scopes=SCOPES,
-        state=saved_state,
-        redirect_uri=REDIRECT_URI
-    )
-    
-    # 🔥 Restore code_verifier for PKCE
-    if code_verifier:
-        flow.code_verifier = code_verifier
+    try:
+        flow = Flow.from_client_config(
+            client_config,
+            scopes=SCOPES,
+            state=saved_state,
+            redirect_uri=REDIRECT_URI
+        )
+        
+        # 🔥 Restore code_verifier for PKCE
+        if code_verifier:
+            flow.code_verifier = code_verifier
+            print(f"[AUTH CALLBACK] Restored code_verifier")
 
-    flow.fetch_token(code=code)
+        print(f"[AUTH CALLBACK] Fetching token...")
+        flow.fetch_token(code=code)
+        print(f"[AUTH CALLBACK] Token fetched successfully")
 
-    creds = flow.credentials
+        creds = flow.credentials
+        
+        if not creds.token:
+            print("[AUTH ERROR] No access token in credentials")
+            return {"error": "Failed to get access token from Google"}
 
-    # Save token to Supabase
-    supabase.table("user_tokens").upsert({
-        "user_id": user_id,
-        "access_token": creds.token,
-        "refresh_token": creds.refresh_token,
-        "expiry": creds.expiry.isoformat() if creds.expiry else None
-    }, on_conflict="user_id").execute()
+        print(f"[AUTH CALLBACK] Saving token for user {user_id}")
+        # Save token to Supabase
+        result = supabase.table("user_tokens").upsert({
+            "user_id": user_id,
+            "access_token": creds.token,
+            "refresh_token": creds.refresh_token,
+            "expiry": creds.expiry.isoformat() if creds.expiry else None
+        }, on_conflict="user_id").execute()
+        print(f"[AUTH CALLBACK] Token saved to Supabase: {result}")
 
-    os.remove(STATE_FILE)
+        os.remove(STATE_FILE)
+        print(f"[AUTH CALLBACK] State file cleaned up, redirecting to dashboard")
 
-    # Redirect back to frontend dashboard after auth
-    FRONTEND_URL = "https://reddit-shorts-frontend.vercel.app/dashboard"
-    return RedirectResponse(FRONTEND_URL)
+        # Redirect back to frontend dashboard after auth
+        FRONTEND_URL = "https://reddit-shorts-frontend.vercel.app/dashboard"
+        return RedirectResponse(FRONTEND_URL)
+        
+    except Exception as e:
+        import traceback
+        print(f"[AUTH ERROR] Exception in callback: {e}")
+        traceback.print_exc()
+        return {"error": f"OAuth callback failed: {str(e)}"}
 
 
 # 🔹 STEP 3: STATUS

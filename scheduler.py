@@ -166,7 +166,7 @@ def load_settings(user_id: str):
         "minute": 0,
         "niche": "stories",
         "content_mode": "auto",  # auto | custom
-        "custom_topic": None,
+        "topic": None,  # user-provided topic (when content_mode=custom)
         "video_style": "gameplay",  # gameplay | satisfying | subway | minecraft | cinematic
         "voice": "male_deep",  # male_deep | male_calm | female_energetic | female_soft
         "language": "english",  # english | hindi | hinglish
@@ -259,8 +259,9 @@ def daily_job(user_id: str, token_data: dict = None):
         
         # Pick topic based on content mode
         content_mode = settings.get("content_mode", "auto")
-        if content_mode == "custom" and settings.get("custom_topic"):
-            topic = settings.get("custom_topic")
+        if content_mode == "custom" and settings.get("topic"):
+            # Custom mode - use the user-provided topic
+            topic = settings.get("topic")
             niche = "custom"
         else:
             # Auto mode - pick from niche

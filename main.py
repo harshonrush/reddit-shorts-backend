@@ -95,7 +95,7 @@ class SeriesRequest(BaseModel):
     enabled: bool = True
     niche: str = "facts"  # facts, motivation, reddit_stories, ai_stories, history
     content_mode: str = "auto"  # auto | custom
-    custom_topic: str | None = None
+    topic: str | None = None  # user-provided topic (when content_mode=custom)
     video_style: str = "gameplay"  # gameplay, satisfying, subway, minecraft, cinematic
     voice: str = "male_deep"  # male_deep, male_calm, female_energetic, female_soft
     language: str = "english"  # english, hindi, hinglish
@@ -402,7 +402,7 @@ async def create_series(request: SeriesRequest):
             "minute": minute,
             "niche": request.niche,
             "content_mode": request.content_mode,
-            "custom_topic": request.custom_topic if request.content_mode == "custom" else None,
+            "topic": request.topic if request.content_mode == "custom" else None,
             "video_style": request.video_style,
             "voice": request.voice,
             "language": request.language,

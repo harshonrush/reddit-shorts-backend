@@ -4,41 +4,55 @@ import requests
 
 SAMPLE_VIDEO = os.path.join("..", "assets", "sample.mp4")
 
-# Public domain sample video URL (30 seconds, 720p)
-SAMPLE_VIDEO_URL = "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/6150661-uhd_2160_4096_25fps.mp4"
+# Video style URLs (stored in Supabase Storage)
+VIDEO_STYLES = {
+    "gameplay": "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/6150661-uhd_2160_4096_25fps.mp4",
+    "satisfying": "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/satisfying.mp4",
+    "subway": "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/subway-surfers.mp4",
+    "minecraft": "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/minecraft.mp4",
+    "cinematic": "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/cinematic.mp4"
+}
+
+# Default fallback
+DEFAULT_STYLE = "gameplay"
 
 
-def fetch_video(output_path: str, query: str = None) -> str:
-    """Fetch background video - uses local sample.mp4 or downloads from URL.
+def fetch_video(output_path: str, style: str = None, query: str = None) -> str:
+    """Fetch background video - uses style-specific URL or local sample.
     
     Args:
         output_path: Path to save the video file
+        style: Video style (gameplay, satisfying, subway, minecraft, cinematic)
         query: Search query (unused, for compatibility)
         
     Returns:
         Path to video file
     """
-    # Try local sample video first
+    # Get style-specific URL
+    video_url = VIDEO_STYLES.get(style, VIDEO_STYLES[DEFAULT_STYLE])
+    print(f"[VIDEO] Using style: {style or DEFAULT_STYLE} -> {video_url}")
+    
+    # Try local sample video first (if exists)
     sample_path = os.path.abspath(SAMPLE_VIDEO)
     if os.path.exists(sample_path):
         shutil.copy(sample_path, output_path)
         print(f"Copied local sample video to {output_path}")
         return output_path
     
-    # Download sample video from URL
-    print(f"Local sample not found, downloading from URL...")
+    # Download style-specific video from URL
+    print(f"[VIDEO] Downloading from URL...")
     try:
-        response = requests.get(SAMPLE_VIDEO_URL, stream=True, timeout=30)
+        response = requests.get(video_url, stream=True, timeout=30)
         response.raise_for_status()
         
         with open(output_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
         
-        print(f"Downloaded sample video to {output_path}")
+        print(f"[VIDEO] Downloaded to {output_path}")
         return output_path
     except Exception as e:
-        print(f"Failed to download video: {e}")
+        print(f"[VIDEO] Failed to download: {e}")
         # Last resort: create a blank video with ffmpeg
         return create_blank_video(output_path)
 

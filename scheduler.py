@@ -10,27 +10,35 @@ from datetime import datetime
 RUNPOD_URL = os.getenv("RUNPOD_URL", "https://api.runpod.ai/v2/jq2krz5bpspj1g/run")
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
 
-def trigger_render(topic: str, user_id: str, token_data: dict) -> dict:
-    """Trigger video rendering on RunPod serverless GPU."""
+def trigger_render(topic: str, user_id: str, token_data: dict, settings: dict = None) -> dict:
+    """Trigger video rendering on RunPod serverless GPU with full settings."""
     if not RUNPOD_API_KEY:
         print(f"[RUNPOD] ERROR: No API key configured")
         return {"status": "error", "message": "Missing RUNPOD_API_KEY"}
 
     try:
-        print(f"[RUNPOD] Triggering render for user {user_id}, topic: {topic}")
+        # Build input with all settings
+        input_data = {
+            "topic": topic,
+            "user_id": user_id,
+            "token_data": token_data,  # Pass user token for upload
+        }
+        
+        # Add optional settings if provided
+        if settings:
+            input_data["voice"] = settings.get("voice", "male_deep")
+            input_data["language"] = settings.get("language", "english")
+            input_data["video_style"] = settings.get("video_style", "gameplay")
+            input_data["duration"] = settings.get("duration", "30-60")
+        
+        print(f"[RUNPOD] Triggering render for user {user_id}, topic: {topic}, voice: {input_data.get('voice')}")
         res = requests.post(
             RUNPOD_URL,
             headers={
                 "Authorization": f"Bearer {RUNPOD_API_KEY}",
                 "Content-Type": "application/json"
             },
-            json={
-                "input": {
-                    "topic": topic,
-                    "user_id": user_id,
-                    "token_data": token_data  # Pass user token for upload
-                }
-            },
+            json={"input": input_data},
             timeout=60  # Increased for cold start
         )
         result = res.json()
@@ -97,13 +105,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Niche-based topic mapping
+# Niche-based topic mapping (expanded)
 NICHE_TOPICS = {
-    "heartbreak": ["heartbreak", "breakup recovery", "moving on", "lost love", "emotional healing"],
+    "facts": ["amazing facts", "did you know", "mind blowing facts", "science facts", "history facts"],
     "motivation": ["discipline", "morning routine", "success mindset", "never give up", "transformation"],
+    "reddit_stories": ["creepy encounter", "strange neighbor", "mystery solved", "unexpected twist", "life changing moment"],
+    "ai_stories": ["futuristic story", "AI takeover", "robot romance", "virtual reality", "digital consciousness"],
+    "history": ["ancient mysteries", "war stories", "forgotten history", "historical figures", "empire rise and fall"],
+    "heartbreak": ["heartbreak", "breakup recovery", "moving on", "lost love", "emotional healing"],
     "business": ["startup struggle", "entrepreneur journey", "side hustle success", "business betrayal", "rags to riches"],
     "fitness": ["gym discipline", "weight loss journey", "fitness transformation", "mental strength", "health wake-up call"],
     "stories": ["creepy encounter", "strange neighbor", "mystery solved", "unexpected twist", "life changing moment"]
+}
+
+# Voice mapping (user-friendly names → ElevenLabs IDs)
+VOICE_MAP = {
+    "male_deep": "pNInz6obpgDQGcFmaJgB",      # Adam
+    "male_calm": "IKne3meq5aSn9XLyUdCD",      # Antoni
+    "female_energetic": "EXAVITQu4vr4xnSDxMaL",  # Bella
+    "female_soft": "MF3mGyEYCl7XYWbV9V6O"       # Elli
+}
+
+# Language prompts for script generation
+LANGUAGE_PROMPTS = {
+    "english": "Generate in English",
+    "hindi": "Generate in Hindi language using Devanagari script",
+    "hinglish": "Generate in Hinglish (Hindi written in English/Roman script)"
 }
 
 # Default random topics for backward compatibility
@@ -131,15 +158,24 @@ def load_settings(user_id: str):
     if res.data:
         return res.data[0]
 
-    # CREATE ROW IF NOT EXISTS
+    # CREATE ROW IF NOT EXISTS - with new fields
     default_data = {
         "user_id": user_id,
         "enabled": False,
         "hour": 18,
         "minute": 0,
         "niche": "stories",
+        "content_mode": "auto",  # auto | custom
+        "custom_topic": None,
+        "video_style": "gameplay",  # gameplay | satisfying | subway | minecraft | cinematic
+        "voice": "male_deep",  # male_deep | male_calm | female_energetic | female_soft
+        "language": "english",  # english | hindi | hinglish
+        "duration": "30-60",  # 15-30 | 30-60 | 60-90
+        "frequency": "daily",  # daily | alternate
         "last_posted_date": None,
-        "is_posting": False
+        "is_posting": False,
+        "yt_connected": False,
+        "channel_id": None
     }
 
     supabase.table("users_settings").insert(default_data).execute()
@@ -210,16 +246,40 @@ def daily_job(user_id: str, token_data: dict = None):
             save_settings(user_id, {"is_posting": False, "last_error": "No token provided"})
             return
 
-        # Pick topic based on user's niche
-        niche = settings.get("niche", "stories")
-        if niche in NICHE_TOPICS:
-            topic = random.choice(NICHE_TOPICS[niche])
+        # Check frequency - skip if not daily and already posted recently
+        frequency = settings.get("frequency", "daily")
+        last_posted = settings.get("last_posted_date")
+        if frequency == "alternate" and last_posted:
+            from datetime import datetime, timedelta
+            last_date = datetime.strptime(last_posted, "%Y-%m-%d")
+            if (datetime.utcnow() - last_date).days < 2:
+                print(f"[SCHEDULER] [USER:{user_id}] Skipping (alternate days, last posted {last_posted})")
+                save_settings(user_id, {"is_posting": False})
+                return
+        
+        # Pick topic based on content mode
+        content_mode = settings.get("content_mode", "auto")
+        if content_mode == "custom" and settings.get("custom_topic"):
+            topic = settings.get("custom_topic")
+            niche = "custom"
         else:
-            topic = random.choice(TOPICS)
-        print(f"[SCHEDULER] [USER:{user_id}] Niche: {niche} | Topic: {topic}")
+            # Auto mode - pick from niche
+            niche = settings.get("niche", "stories")
+            if niche in NICHE_TOPICS:
+                topic = random.choice(NICHE_TOPICS[niche])
+            else:
+                topic = random.choice(TOPICS)
+        
+        # Get voice and language settings
+        voice = settings.get("voice", "male_deep")
+        language = settings.get("language", "english")
+        video_style = settings.get("video_style", "gameplay")
+        duration = settings.get("duration", "30-60")
+        
+        print(f"[SCHEDULER] [USER:{user_id}] Niche: {niche} | Topic: {topic} | Voice: {voice} | Lang: {language} | Style: {video_style}")
 
-        # TRIGGER RUNPOD SERVERLESS GPU (with user token for upload)
-        result = trigger_render(topic, user_id, token_data)
+        # TRIGGER RUNPOD SERVERLESS GPU (with full settings)
+        result = trigger_render(topic, user_id, token_data, settings)
 
         if result.get("id"):
             job_id = result.get("id")

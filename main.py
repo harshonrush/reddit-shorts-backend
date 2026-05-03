@@ -7,6 +7,7 @@ import requests
 import uuid
 import json
 import time
+import random
 from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -87,6 +88,39 @@ class JobStatusResponse(BaseModel):
     status: str  # "queued" | "processing" | "completed" | "failed"
     video_url: str | None = None
     error: str | None = None
+
+
+class SeriesRequest(BaseModel):
+    user_id: str
+    enabled: bool = True
+    niche: str = "facts"  # facts, motivation, reddit_stories, ai_stories, history
+    content_mode: str = "auto"  # auto | custom
+    custom_topic: str | None = None
+    video_style: str = "gameplay"  # gameplay, satisfying, subway, minecraft, cinematic
+    voice: str = "male_deep"  # male_deep, male_calm, female_energetic, female_soft
+    language: str = "english"  # english, hindi, hinglish
+    duration: str = "30-60"  # 15-30, 30-60, 60-90
+    post_time: str = "18:30"  # HH:MM format (IST)
+    frequency: str = "daily"  # daily | alternate
+
+
+class SeriesResponse(BaseModel):
+    status: str
+    user_id: str
+    settings: dict
+
+
+class PreviewRequest(BaseModel):
+    niche: str = "facts"
+    topic: str | None = None
+    voice: str = "male_deep"
+    language: str = "english"
+
+
+class PreviewResponse(BaseModel):
+    script: str
+    sample_captions: list
+    voice_preview_url: str | None = None
 
 
 def safe_filename(text):
@@ -346,6 +380,96 @@ async def set_auto_post_settings(enabled: bool, hour: int = 18, minute: int = 0,
     """Update auto-post settings for a user."""
     update_schedule(enabled, hour, minute, user_id, niche)
     return {"status": "updated", "enabled": enabled, "time": f"{hour}:{minute:02d}", "user_id": user_id, "niche": niche}
+
+
+# ==================== NEW: Improved YouTube Automation Flow ====================
+
+@app.post("/series", response_model=SeriesResponse)
+async def create_series(request: SeriesRequest):
+    """Create or update a video series with full configuration."""
+    try:
+        # Parse post_time (HH:MM) to hour and minute
+        try:
+            hour, minute = map(int, request.post_time.split(":"))
+        except:
+            hour, minute = 18, 30
+        
+        # Build full settings
+        settings = {
+            "user_id": request.user_id,
+            "enabled": request.enabled,
+            "hour": hour,
+            "minute": minute,
+            "niche": request.niche,
+            "content_mode": request.content_mode,
+            "custom_topic": request.custom_topic if request.content_mode == "custom" else None,
+            "video_style": request.video_style,
+            "voice": request.voice,
+            "language": request.language,
+            "duration": request.duration,
+            "frequency": request.frequency,
+            "is_posting": False,
+            "yt_connected": True  # Assume connected when creating series
+        }
+        
+        # Save to database
+        from scheduler import save_settings
+        save_settings(request.user_id, settings)
+        
+        return SeriesResponse(
+            status="created",
+            user_id=request.user_id,
+            settings=settings
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/series/{user_id}")
+async def get_series(user_id: str):
+    """Get series settings for a user."""
+    from scheduler import load_settings
+    settings = load_settings(user_id)
+    return {"user_id": user_id, "settings": settings}
+
+
+@app.post("/preview", response_model=PreviewResponse)
+async def generate_preview(request: PreviewRequest):
+    """Generate preview: script sample and captions."""
+    try:
+        # Generate sample script
+        from script_engine import generate_script
+        from scheduler import NICHE_TOPICS, LANGUAGE_PROMPTS
+        
+        # Get topic
+        if request.topic:
+            topic = request.topic
+        elif request.niche in NICHE_TOPICS:
+            topic = random.choice(NICHE_TOPICS[request.niche])
+        else:
+            topic = "interesting story"
+        
+        # Add language instruction
+        lang_prompt = LANGUAGE_PROMPTS.get(request.language, LANGUAGE_PROMPTS["english"])
+        full_topic = f"{topic}. {lang_prompt}. Make it engaging for YouTube Shorts."
+        
+        script = generate_script(full_topic)
+        
+        # Generate sample captions (first 3 lines)
+        words = script.split()[:20]  # First ~20 words
+        sample_captions = [
+            {"text": " ".join(words[:7]), "start": 0, "end": 3},
+            {"text": " ".join(words[7:14]), "start": 3, "end": 6},
+            {"text": " ".join(words[14:20]), "start": 6, "end": 9}
+        ]
+        
+        return PreviewResponse(
+            script=script,
+            sample_captions=sample_captions,
+            voice_preview_url=None  # Could generate actual TTS preview here
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Trigger endpoint for external cron service

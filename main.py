@@ -629,16 +629,24 @@ def run_cron(secret: str):
                 continue
         
         # Enqueue to Redis worker with retries (pass pre-fetched token AND lock_key)
-        video_queue.enqueue(
-            daily_job,
-            user_id,
-            token_data,
-            lock_key,  # Pass lock key for cleanup in finally
-            retry=Retry(max=3, interval=[10, 30, 60]),
-            job_timeout=600
-        )
-        
-        triggered.append(user_id)
+        try:
+            job = video_queue.enqueue(
+                daily_job,
+                user_id,
+                token_data,
+                lock_key,  # Pass lock key for cleanup in finally
+                retry=Retry(max=3, interval=[10, 30, 60]),
+                job_timeout=600
+            )
+            print(f"[CRON ENQUEUED] Job ID: {job.id} for user {user_id}")
+            triggered.append(user_id)
+        except Exception as e:
+            print(f"[CRON ERROR] Failed to enqueue job for {user_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            # Release locks since job failed to enqueue
+            redis_conn.delete(lock_key)
+            supabase.table("users_settings").update({"is_posting": False}).eq("user_id", user_id).execute()
     
     return {"status": "checked", "triggered": triggered, "time": now.isoformat()}
 

@@ -235,7 +235,11 @@ def daily_job(user_id: str, token_data: dict = None, lock_key: str = None):
         token_data: YouTube OAuth tokens
         lock_key: Redis lock key to release on completion (optional)
     """
-    print(f"[WORKER] daily_job STARTED for user {user_id}")
+    print(f"\n{'='*60}")
+    print(f"[WORKER] 🚀 daily_job EXECUTING for user {user_id}")
+    print(f"[WORKER] Lock key: {lock_key}")
+    print(f"[WORKER] Token present: {bool(token_data)}")
+    print(f"{'='*60}\n")
     from redis_queue import redis_conn
     
     try:

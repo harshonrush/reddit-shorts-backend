@@ -53,7 +53,10 @@ def fetch_video(output_path: str, style: str = None, query: str = None) -> str:
         return output_path
     except Exception as e:
         print(f"[VIDEO] Failed to download: {e}")
+        import traceback
+        traceback.print_exc()
         # Last resort: create a blank video with ffmpeg
+        print(f"[VIDEO] Falling back to blank video creation...")
         return create_blank_video(output_path)
 
 
@@ -75,8 +78,16 @@ def create_blank_video(output_path: str, duration: int = 60) -> str:
     ]
     
     try:
-        subprocess.run(cmd, capture_output=True, check=True)
-        print(f"Created blank video at {output_path}")
+        result = subprocess.run(cmd, capture_output=True, check=True)
+        print(f"[VIDEO] Created blank video at {output_path}")
         return output_path
+    except subprocess.CalledProcessError as e:
+        print(f"[VIDEO ERROR] FFmpeg failed: {e}")
+        print(f"[VIDEO ERROR] stderr: {e.stderr.decode() if e.stderr else 'None'}")
+        print(f"[VIDEO ERROR] stdout: {e.stdout.decode() if e.stdout else 'None'}")
+        raise RuntimeError(f"Failed to create video: {e}")
     except Exception as e:
+        print(f"[VIDEO ERROR] Unexpected error creating video: {e}")
+        import traceback
+        traceback.print_exc()
         raise RuntimeError(f"Failed to create video: {e}")

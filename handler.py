@@ -57,15 +57,34 @@ def handler(job):
         output_path = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
 
         # 4. Pipeline with voice and style
+        print(f"[RUNPOD] Step 1: Generating audio with voice {voice_id}...", file=sys.stderr)
         generate_audio(script, audio_path, voice_id=voice_id)
+        audio_size = os.path.getsize(audio_path)
+        print(f"[RUNPOD] Audio generated: {audio_size} bytes", file=sys.stderr)
+        if audio_size < 1000:
+            raise Exception(f"Audio file too small ({audio_size} bytes) - TTS failed")
+        
+        print(f"[RUNPOD] Step 2: Fetching video with style {video_style}...", file=sys.stderr)
         fetch_video(video_path, style=video_style)
+        video_size = os.path.getsize(video_path)
+        print(f"[RUNPOD] Video fetched: {video_size} bytes", file=sys.stderr)
+        if video_size < 10000:
+            raise Exception(f"Video file too small ({video_size} bytes) - fetch failed")
         
         # 5. Get word timestamps from Deepgram
+        print(f"[RUNPOD] Step 3: Getting word timestamps...", file=sys.stderr)
         words = get_word_timestamps(audio_path)
         print(f"[RUNPOD] Got {len(words)} words for captions", file=sys.stderr)
+        if not words:
+            print(f"[RUNPOD WARNING] No words detected - captions will be empty", file=sys.stderr)
         
         # 6. Generate viral captions with FFmpeg (big text + zoom effects)
+        print(f"[RUNPOD] Step 4: Generating animated captions...", file=sys.stderr)
         generate_animated_captions(video_path, audio_path, words, output_path)
+        output_size = os.path.getsize(output_path)
+        print(f"[RUNPOD] Output video: {output_size} bytes", file=sys.stderr)
+        if output_size < 10000:
+            raise Exception(f"Output video too small ({output_size} bytes) - caption generation failed")
 
         print("[RUNPOD] Video rendered successfully", file=sys.stderr)
 

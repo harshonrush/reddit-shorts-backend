@@ -128,6 +128,15 @@ def callback(code: str, state: str):
             return {"error": "Failed to get access token from Google"}
 
         print(f"[AUTH CALLBACK] Saving token for user {user_id}")
+        
+        # First ensure user exists in users_settings (foreign key requirement)
+        try:
+            from scheduler import load_settings
+            load_settings(user_id)  # This creates default row if not exists
+            print(f"[AUTH CALLBACK] Ensured user row exists in users_settings")
+        except Exception as e:
+            print(f"[AUTH WARNING] Could not create user settings row: {e}")
+        
         # Save token to Supabase
         result = supabase.table("user_tokens").upsert({
             "user_id": user_id,

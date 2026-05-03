@@ -174,8 +174,7 @@ def load_settings(user_id: str):
         "frequency": "daily",  # daily | alternate
         "last_posted_date": None,
         "is_posting": False,
-        "yt_connected": False,
-        "channel_id": None
+        "yt_connected": False
     }
 
     supabase.table("users_settings").insert(default_data).execute()

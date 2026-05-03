@@ -19,8 +19,12 @@ video_queue = Queue(
 )
 
 
-def safe_redis_set(key, value, ex=None):
-    """Safely set to Redis - handles JSON serialization internally."""
+def safe_redis_set(key, value, ex=900):
+    """Safely set to Redis - handles JSON serialization internally.
+    
+    Args:
+        ex: Expiry time in seconds (default 900 = 15 min for backup safety)
+    """
     if not isinstance(value, str):
         value = json.dumps(value)
     redis_conn.set(key, value, ex=ex)

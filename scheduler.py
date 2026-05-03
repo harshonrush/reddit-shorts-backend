@@ -227,10 +227,17 @@ def token_exists(user_id: str) -> bool:
     return len(res.data) > 0
 
 
-def daily_job(user_id: str, token_data: dict = None):
-    """Orchestrate daily video generation via RunPod serverless GPU."""
+def daily_job(user_id: str, token_data: dict = None, lock_key: str = None):
+    """Orchestrate daily video generation via RunPod serverless GPU.
+    
+    Args:
+        user_id: User identifier
+        token_data: YouTube OAuth tokens
+        lock_key: Redis lock key to release on completion (optional)
+    """
     print(f"[WORKER] daily_job STARTED for user {user_id}")
-
+    from redis_queue import redis_conn
+    
     try:
         settings = load_settings(user_id)
         if not settings.get("enabled", False):
@@ -329,12 +336,30 @@ def daily_job(user_id: str, token_data: dict = None):
         logger.error(f"[USER:{user_id}] Error in daily_job: {e}")
         import traceback
         logger.error(f"[USER:{user_id}] {traceback.format_exc()}")
+        # Store error in DB
         save_settings(user_id, {
             "is_posting": False,
             "last_error": str(e)[:200]
         })
+        raise e  # Re-raise for RQ visibility
     finally:
-        print(f"[WORKER] daily_job ENDED for {user_id}")
+        # GUARANTEED LOCK RELEASE
+        print(f"[WORKER] daily_job ENDED for {user_id}, releasing locks...")
+        
+        # Release DB lock (is_posting)
+        try:
+            save_settings(user_id, {"is_posting": False})
+            print(f"[LOCK RELEASED] DB is_posting=False for {user_id}")
+        except Exception as e:
+            print(f"[LOCK ERROR] Failed to release DB lock for {user_id}: {e}")
+        
+        # Release Redis lock
+        if lock_key:
+            try:
+                redis_conn.delete(lock_key)
+                print(f"[LOCK RELEASED] Redis lock deleted: {lock_key}")
+            except Exception as e:
+                print(f"[LOCK ERROR] Failed to delete Redis lock {lock_key}: {e}")
 
 
 def update_schedule(enabled: bool, hour: int, minute: int, user_id: str, niche: str):

@@ -492,16 +492,21 @@ async def trigger_daily_post(user_id: str = "default", secret: str = None):
         return {"status": "skipped", "reason": "No YouTube token found"}
     token_data = token_res.data[0]
     
-    # Enqueue to Redis worker
+    # Create lock key for this manual trigger
+    from datetime import date
+    lock_key = f"lock:{user_id}:{date.today().isoformat()}:manual"
+    
+    # Enqueue to Redis worker with lock_key
     video_queue.enqueue(
         daily_job,
         user_id,
         token_data,
+        lock_key,  # Pass for cleanup
         retry=Retry(max=3, interval=[10, 30, 60]),
         job_timeout=600
     )
     
-    return {"status": "triggered", "user_id": user_id}
+    return {"status": "triggered", "user_id": user_id, "lock_key": lock_key}
 
 
 # Cron endpoint for cron-job.org (runs every 5 minutes)
@@ -602,13 +607,16 @@ def run_cron(secret: str):
 
         print(f"[CRON RUNNING] {user_id} (lock acquired, enqueueing job)")
         
-        # 🔥 REDIS LOCK: Prevent duplicate enqueuing (24h expiry)
+        # 🔥 ATOMIC REDIS LOCK: NX=True ensures only one process gets the lock
         lock_key = f"lock:{user_id}:{today}"
-        if safe_redis_get(lock_key):
-            print(f"[CRON SKIP] {user_id} Redis lock exists (job already enqueued or running)")
+        
+        # Try to acquire lock atomically (only if NOT exists) with 15 min TTL backup
+        lock_acquired = redis_conn.set(lock_key, "1", nx=True, ex=900)
+        if not lock_acquired:
+            print(f"[CRON SKIP] {user_id} Redis lock already exists (atomic NX failed)")
             continue
-
-        safe_redis_set(lock_key, 1, ex=86400)
+        
+        print(f"[CRON LOCK] Redis lock acquired: {lock_key} (TTL 15min)")
         
         # 🚨 EXTRA SAFETY: Verify our lock is still active (is_posting should be True)
         fresh_check = supabase.table("users_settings").select("is_posting").eq("user_id", user_id).execute()
@@ -617,13 +625,15 @@ def run_cron(secret: str):
             # If is_posting is not True, another process modified it (race condition)
             if not check.get("is_posting"):
                 print(f"[CRON SKIP] {user_id} lock lost (race condition)")
+                redis_conn.delete(lock_key)  # Release our Redis lock
                 continue
         
-        # Enqueue to Redis worker with retries (pass pre-fetched token)
+        # Enqueue to Redis worker with retries (pass pre-fetched token AND lock_key)
         video_queue.enqueue(
             daily_job,
             user_id,
             token_data,
+            lock_key,  # Pass lock key for cleanup in finally
             retry=Retry(max=3, interval=[10, 30, 60]),
             job_timeout=600
         )

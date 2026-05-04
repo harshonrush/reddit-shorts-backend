@@ -98,7 +98,7 @@ class SeriesRequest(BaseModel):
     topic: str | None = None  # user-provided topic (when content_mode=custom)
     video_style: str = "gameplay"  # gameplay, satisfying, subway, minecraft, cinematic
     voice: str = "male_deep"  # male_deep, male_calm, female_energetic, female_soft
-    language: str = "english"  # english, hindi, hinglish
+    language: str = "english"  # english, hindi
     duration: str = "30-60"  # 15-30, 30-60, 60-90
     post_time: str = "18:30"  # HH:MM format (IST)
     frequency: str = "daily"  # daily | alternate

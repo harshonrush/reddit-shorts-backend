@@ -12,17 +12,16 @@ from storage import upload_video_bytes  # Direct upload to Supabase
 
 # Voice mapping (user-friendly → ElevenLabs ID)
 VOICE_MAP = {
-    "male_deep": "pNInz6obpgDQGcFmaJgB",      # Adam
-    "male_calm": "IKne3meq5aSn9XLyUdCD",      # Antoni
-    "female_energetic": "EXAVITQu4vr4xnSDxMaL",  # Bella
-    "female_soft": "MF3mGyEYCl7XYWbV9V6O"       # Elli
+    "male_deep": "Drew",
+    "male_calm": "Paul",     
+    "female_energetic": "Domi",  
+    "female_soft": "Rachel"       
 }
 
 # Language prompts for script generation
 LANGUAGE_PROMPTS = {
     "english": "Generate in English",
-    "hindi": "Generate in Hindi language using Devanagari script",
-    "hinglish": "Generate in Hinglish (Hindi written in English/Roman script)"
+    "hindi": "Generate in Hindi language using Devanagari script"
 }
 
 

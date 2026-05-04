@@ -129,8 +129,7 @@ VOICE_MAP = {
 # Language prompts for script generation
 LANGUAGE_PROMPTS = {
     "english": "Generate in English",
-    "hindi": "Generate in Hindi language using Devanagari script",
-    "hinglish": "Generate in Hinglish (Hindi written in English/Roman script)"
+    "hindi": "Generate in Hindi language using Devanagari script"
 }
 
 # Default random topics for backward compatibility
@@ -169,7 +168,7 @@ def load_settings(user_id: str):
         "topic": None,  # user-provided topic (when content_mode=custom)
         "video_style": "gameplay",  # gameplay | satisfying | subway | minecraft | cinematic
         "voice": "male_deep",  # male_deep | male_calm | female_energetic | female_soft
-        "language": "english",  # english | hindi | hinglish
+        "language": "english",  # english | hindi
         "duration": "30-60",  # 15-30 | 30-60 | 60-90
         "frequency": "daily",  # daily | alternate
         "last_posted_date": None,

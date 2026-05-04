@@ -12,10 +12,10 @@ from storage import upload_video_bytes  # Direct upload to Supabase
 
 # Voice mapping (user-friendly → ElevenLabs ID)
 VOICE_MAP = {
-    "male_deep": "Drew",
-    "male_calm": "Paul",     
-    "female_energetic": "Domi",  
-    "female_soft": "Rachel"       
+    "male_deep": "29vD33N1CtxCmqQRPOHJ",
+    "male_calm": "0JRpJnrcyEVIabsZ4U5I",     
+    "female_energetic": "AZnzlk1XvdvUeBnXmlld",  
+    "female_soft": "TYKLc7ViOIGE13dSZYlK"       
 }
 
 # Language prompts for script generation

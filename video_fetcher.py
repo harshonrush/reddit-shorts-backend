@@ -7,10 +7,10 @@ SAMPLE_VIDEO = os.path.join("..", "assets", "sample.mp4")
 # Video style URLs (stored in Supabase Storage)
 VIDEO_STYLES = {
     "gameplay": "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/6150661-uhd_2160_4096_25fps.mp4",
-    "satisfying": "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/satisfying.mp4",
-    "subway": "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/subway-surfers.mp4",
-    "minecraft": "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/minecraft.mp4",
-    "cinematic": "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/cinematic.mp4"
+    "satisfying": "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/6150661-uhd_2160_4096_25fps.mp4",
+    "subway": "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/6150661-uhd_2160_4096_25fps.mp4",
+    "minecraft": "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/6150661-uhd_2160_4096_25fps.mp4",
+    "cinematic": "https://jcsczgrtoocugekkvkbs.supabase.co/storage/v1/object/public/videos/default/6150661-uhd_2160_4096_25fps.mp4"
 }
 
 # Default fallback

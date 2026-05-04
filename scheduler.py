@@ -120,11 +120,12 @@ NICHE_TOPICS = {
 
 # Voice mapping (user-friendly names → ElevenLabs IDs)
 VOICE_MAP = {
-    "male_deep": "pNInz6obpgDQGcFmaJgB",      # Adam
-    "male_calm": "IKne3meq5aSn9XLyUdCD",      # Antoni
-    "female_energetic": "EXAVITQu4vr4xnSDxMaL",  # Bella
-    "female_soft": "MF3mGyEYCl7XYWbV9V6O"       # Elli
+    "male_deep": "Drew",
+    "male_calm": "Paul",     
+    "female_energetic": "Domi",  
+    "female_soft": "Rachel"       
 }
+
 
 # Language prompts for script generation
 LANGUAGE_PROMPTS = {
@@ -259,7 +260,7 @@ def daily_job(user_id: str, token_data: dict = None, lock_key: str = None):
         frequency = settings.get("frequency", "daily")
         last_posted = settings.get("last_posted_date")
         if frequency == "alternate" and last_posted:
-            from datetime import datetime, timedelta
+            from datetime import timedelta
             last_date = datetime.strptime(last_posted, "%Y-%m-%d")
             if (datetime.utcnow() - last_date).days < 2:
                 print(f"[SCHEDULER] [USER:{user_id}] Skipping (alternate days, last posted {last_posted})")

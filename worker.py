@@ -22,7 +22,8 @@ if __name__ == "__main__":
     
     try:
         worker = Worker([queue], connection=redis_conn)
-        print("[WORKER] Worker initialized, starting work loop...")
+        print("[WORKER] Worker initialized, listening for jobs...")
+        print("[WORKER] Waiting for jobs from cron endpoint...")
         worker.work()
     except Exception as e:
         print(f"[WORKER ERROR] {e}")

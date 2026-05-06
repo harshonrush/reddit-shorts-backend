@@ -57,7 +57,18 @@ def handler(job):
 
         # 4. Pipeline with voice and style
         print(f"[RUNPOD] Step 1: Generating audio with voice {voice_id}...", file=sys.stderr)
-        generate_audio(script, audio_path, voice_id=voice_id)
+        try:
+            generate_audio(script, audio_path, voice_id=voice_id)
+        except Exception as e:
+            print(f"[RUNPOD ERROR] TTS generation failed: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            raise Exception(f"TTS failed: {e}")
+        
+        # Verify audio file exists and has content
+        if not os.path.exists(audio_path):
+            raise Exception(f"Audio file not created at {audio_path}")
+        
         audio_size = os.path.getsize(audio_path)
         print(f"[RUNPOD] Audio generated: {audio_size} bytes", file=sys.stderr)
         if audio_size < 1000:

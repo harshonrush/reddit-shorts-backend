@@ -66,6 +66,16 @@ def generate_viral_captions_ffmpeg(
     - Center-bottom positioning
     """
     
+    # Validate inputs exist
+    if not os.path.exists(video_path):
+        raise RuntimeError(f"Video file not found: {video_path}")
+    if not os.path.exists(audio_path):
+        raise RuntimeError(f"Audio file not found: {audio_path}")
+    
+    print(f"[FFMPEG] Video: {video_path} ({os.path.getsize(video_path)} bytes)", file=sys.stderr)
+    print(f"[FFMPEG] Audio: {audio_path} ({os.path.getsize(audio_path)} bytes)", file=sys.stderr)
+    print(f"[FFMPEG] Words: {len(words)}", file=sys.stderr)
+    
     if not words:
         # No captions, just copy video
         cmd = [

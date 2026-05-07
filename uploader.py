@@ -2,35 +2,135 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 import tempfile
 import requests
 from db import supabase
 
 
-def refresh_token_if_needed(creds: Credentials, user_id: str) -> Credentials:
-    """Refresh access token if expired or about to expire."""
+def _get_redis_lock(lock_key: str, ttl: int = 60) -> bool:
+    """Try to acquire Redis lock. Returns True if acquired."""
+    try:
+        from redis_queue import redis_conn
+        # NX=True: only set if not exists (atomic)
+        acquired = redis_conn.set(lock_key, "1", nx=True, ex=ttl)
+        return bool(acquired)
+    except Exception as e:
+        print(f"[TOKEN LOCK] Redis error: {e}")
+        return False  # Fail to acquire lock if Redis is down (safer)
+
+
+def _release_redis_lock(lock_key: str):
+    """Release Redis lock."""
+    try:
+        from redis_queue import redis_conn
+        redis_conn.delete(lock_key)
+    except Exception as e:
+        print(f"[TOKEN LOCK] Failed to release lock: {e}")
+
+
+def _parse_expiry(expiry_str) -> datetime:
+    """Parse expiry string to timezone-aware datetime."""
+    if not expiry_str:
+        return None
+    
+    if isinstance(expiry_str, datetime):
+        expiry = expiry_str
+    else:
+        expiry = datetime.fromisoformat(expiry_str)
+    
+    # Make timezone-aware (assume UTC if no timezone)
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    
+    return expiry
+
+
+def refresh_token_if_needed(creds: Credentials, user_id: str, old_refresh_token: str = None) -> Credentials:
+    """Refresh access token if expired or about to expire (with 5-min buffer).
+    
+    Args:
+        creds: Google OAuth credentials
+        user_id: User identifier
+        old_refresh_token: Original refresh token (to preserve if Google returns None)
+    
+    Returns:
+        Updated credentials
+    """
     if not creds:
         return creds
-
-    # Refresh if expired or expiring in < 5 minutes
-    if creds.expired or (creds.expiry and datetime.utcnow() >= (creds.expiry - timedelta(minutes=5))):
-        if not creds.refresh_token:
-            print("[TOKEN] No refresh token available")
-            return creds
-
+    
+    # Handle expiry - creds.expiry is already a datetime object
+    expiry = creds.expiry
+    if expiry and expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    
+    now = datetime.now(timezone.utc)
+    
+    # Check if refresh needed (5-minute buffer before expiry)
+    needs_refresh = False
+    if expiry:
+        buffer_time = expiry - timedelta(minutes=5)
+        needs_refresh = buffer_time <= now
+    else:
+        needs_refresh = True  # No expiry = assume expired
+    
+    print(f"[TOKEN DEBUG] user_id={user_id}")
+    print(f"[TOKEN DEBUG] expiry={expiry}")
+    print(f"[TOKEN DEBUG] now={now}")
+    print(f"[TOKEN DEBUG] needs_refresh={needs_refresh}")
+    print(f"[TOKEN DEBUG] has_refresh_token={bool(creds.refresh_token)}")
+    
+    if not needs_refresh:
+        print("[TOKEN] Token still valid, no refresh needed")
+        return creds
+    
+    if not creds.refresh_token:
+        print("[TOKEN ERROR] No refresh token available!")
+        return creds
+    
+    # Try to acquire Redis lock to prevent concurrent refreshes
+    lock_key = f"token_refresh:{user_id}"
+    if not _get_redis_lock(lock_key, ttl=60):
+        print("[TOKEN LOCK] Another process is refreshing this token, waiting...")
+        import time
+        time.sleep(2)  # Wait for other process to complete
+        # Re-fetch token from DB (other process should have updated it)
+        return load_credentials_from_supabase(user_id)
+    
+    try:
         print("[TOKEN] Refreshing access token...")
         creds.refresh(Request())
-
-        # Update DB with new token
-        supabase.table("user_tokens").update({
+        print(f"[TOKEN] Refresh successful!")
+        token_preview = creds.token[:20] if creds.token else "None"
+        print(f"[TOKEN DEBUG] new_token={token_preview}...")
+        print(f"[TOKEN DEBUG] new_expiry={creds.expiry}")
+        
+        # IMPORTANT: Google may return refresh_token=None on refresh
+        # Never overwrite DB with null - keep the old refresh token
+        final_refresh_token = creds.refresh_token or old_refresh_token
+        print(f"[TOKEN DEBUG] refresh_token_preserved={bool(creds.refresh_token is None and old_refresh_token)}")
+        
+        # Save updated tokens to DB
+        update_data = {
             "access_token": creds.token,
             "expiry": creds.expiry.isoformat() if creds.expiry else None
-        }).eq("user_id", user_id).execute()
-
-        print("[TOKEN] Token refreshed and saved to DB")
-
+        }
+        if final_refresh_token:
+            update_data["refresh_token"] = final_refresh_token
+        
+        result = supabase.table("user_tokens").update(update_data).eq("user_id", user_id).execute()
+        print(f"[TOKEN] Saved refreshed tokens to DB: {result.data}")
+        
+    except Exception as e:
+        print(f"[TOKEN ERROR] Refresh failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+    finally:
+        _release_redis_lock(lock_key)
+    
     return creds
 
 
@@ -43,13 +143,13 @@ def load_credentials_from_supabase(user_id: str) -> Credentials:
     
     token_data = res.data[0]
     
-    # Parse expiry from ISO string
-    expiry_str = token_data.get("expiry")
-    expiry = datetime.fromisoformat(expiry_str) if expiry_str else None
+    # Parse expiry with proper timezone handling
+    expiry = _parse_expiry(token_data.get("expiry"))
+    old_refresh_token = token_data.get("refresh_token")
     
     creds = Credentials(
         token=token_data["access_token"],
-        refresh_token=token_data["refresh_token"],
+        refresh_token=old_refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
         client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
@@ -57,17 +157,12 @@ def load_credentials_from_supabase(user_id: str) -> Credentials:
         expiry=expiry
     )
     
-    # Refresh if expiring in < 5 minutes
-    if expiry and (expiry - timedelta(minutes=5)) < datetime.utcnow():
-        creds.refresh(Request())
-        
-        # Update Supabase with new tokens
-        supabase.table("user_tokens").upsert({
-            "user_id": user_id,
-            "access_token": creds.token,
-            "refresh_token": creds.refresh_token,
-            "expiry": creds.expiry.isoformat() if creds.expiry else None
-        }, on_conflict="user_id").execute()
+    # Debug log
+    cid = os.getenv("GOOGLE_CLIENT_ID", "")
+    print(f"[UPLOADER DEBUG] load_credentials client_id: {cid[:20]}...")
+    
+    # Use unified refresh function with Redis lock and proper token preservation
+    creds = refresh_token_if_needed(creds, user_id, old_refresh_token)
     
     return creds
 
@@ -105,24 +200,29 @@ def upload_video(video_url: str = None, file_path: str = None, title: str = "", 
         raise ValueError("Either video_url or file_path must be provided")
     
     print("[UPLOADER] STEP 1: Loading credentials...")
+    # Debug: Log client credentials (truncated for security)
+    client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+    client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    print(f"[UPLOADER DEBUG] GOOGLE_CLIENT_ID: {client_id[:20]}...")
+    print(f"[UPLOADER DEBUG] GOOGLE_CLIENT_SECRET set: {bool(client_secret)}")
+    
     if token_data:
         # Use pre-fetched token (saves DB query)
-        # Convert expiry string to datetime if needed
-        expiry = token_data.get("expiry")
-        if isinstance(expiry, str):
-            expiry = datetime.fromisoformat(expiry)
+        # Parse expiry with proper timezone handling
+        expiry = _parse_expiry(token_data.get("expiry"))
 
+        old_refresh_token = token_data.get("refresh_token")
         creds = Credentials(
             token=token_data["access_token"],
-            refresh_token=token_data.get("refresh_token"),
+            refresh_token=old_refresh_token,
             token_uri="https://oauth2.googleapis.com/token",
-            client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
-            client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
+            client_id=client_id,
+            client_secret=client_secret,
             scopes=["https://www.googleapis.com/auth/youtube.upload"],
             expiry=expiry
         )
-        # Refresh if needed
-        creds = refresh_token_if_needed(creds, user_id)
+        # Refresh if needed (pass old_refresh_token to preserve it)
+        creds = refresh_token_if_needed(creds, user_id, old_refresh_token)
     else:
         # Fallback: fetch from DB
         creds = load_credentials_from_supabase(user_id)
@@ -132,6 +232,11 @@ def upload_video(video_url: str = None, file_path: str = None, title: str = "", 
 
     if tags is None:
         tags = ["shorts", "reddit", "story"]
+
+    # Track all temp files for cleanup
+    temp_files = []
+    if downloaded:
+        temp_files.append(file_path)
 
     print("[UPLOADER] STEP 3: Preparing video upload request...")
     request = youtube.videos().insert(
@@ -147,20 +252,82 @@ def upload_video(video_url: str = None, file_path: str = None, title: str = "", 
                 "privacyStatus": "public"
             }
         },
-        media_body=MediaFileUpload(file_path, chunksize=-1, resumable=True)
+        media_body=MediaFileUpload(file_path, chunksize=1024*1024, resumable=True)  # 1MB chunks
     )
 
-    print("[UPLOADER] STEP 4: Sending to YouTube API...")
-    try:
-        response = request.execute()
-        print(f"[UPLOADER] STEP 5: Upload response received: {response}")
-        print(f"✅ Uploaded to YouTube: https://youtube.com/watch?v={response['id']}")
-        return response
-    finally:
-        # Cleanup temp file if we downloaded it
-        if downloaded and file_path and os.path.exists(file_path):
+    print("[UPLOADER] STEP 4: Sending to YouTube API (with retry)...")
+    
+    # Retry logic for YouTube API
+    max_retries = 3
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"[UPLOADER] Upload attempt {attempt + 1}/{max_retries}...")
+            
+            # Chunked upload with progress tracking
+            response = None
+            retry_count = 0
+            max_upload_retries = 100  # Prevent infinite loops
+            
+            while response is None and retry_count < max_upload_retries:
+                status, response = request.next_chunk()
+                if status:
+                    print(f"[UPLOADER] Upload progress: {int(status.progress() * 100)}%")
+                retry_count += 1
+            
+            if response is None:
+                raise Exception("Upload failed: response is None after all chunks")
+            
+            print(f"[UPLOADER] STEP 5: Upload response received: {response}")
+            print(f"✅ Uploaded to YouTube: https://youtube.com/watch?v={response['id']}")
+            
+            # Cleanup temp files on success
+            for temp_file in temp_files:
+                if os.path.exists(temp_file):
+                    try:
+                        os.unlink(temp_file)
+                        print(f"[UPLOADER] Cleaned up temp file: {temp_file}")
+                    except Exception as e:
+                        print(f"[UPLOADER] Failed to cleanup temp file: {e}")
+            
+            return response
+            
+        except Exception as e:
+            last_error = e
+            print(f"[UPLOADER ERROR] Attempt {attempt + 1} failed: {e}")
+            
+            if attempt < max_retries - 1:
+                import time
+                wait_time = 2 ** attempt  # Exponential backoff: 1, 2, 4 seconds
+                print(f"[UPLOADER] Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                # Recreate the request for retry
+                request = youtube.videos().insert(
+                    part="snippet,status",
+                    body={
+                        "snippet": {
+                            "title": title,
+                            "description": description,
+                            "tags": tags,
+                            "categoryId": "22"
+                        },
+                        "status": {
+                            "privacyStatus": "public"
+                        }
+                    },
+                    media_body=MediaFileUpload(file_path, chunksize=1024*1024, resumable=True)
+                )
+    
+    # All retries failed - cleanup and raise
+    print(f"[UPLOADER ERROR] All {max_retries} upload attempts failed")
+    
+    for temp_file in temp_files:
+        if os.path.exists(temp_file):
             try:
-                os.unlink(file_path)
-                print(f"[UPLOADER] Cleaned up temp file: {file_path}")
+                os.unlink(temp_file)
+                print(f"[UPLOADER] Cleaned up temp file: {temp_file}")
             except Exception as e:
                 print(f"[UPLOADER] Failed to cleanup temp file: {e}")
+    
+    raise last_error if last_error else Exception("Upload failed after all retries")

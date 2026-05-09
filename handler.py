@@ -9,24 +9,15 @@ from video_fetcher import fetch_video
 from subtitle import get_word_timestamps  # Deepgram transcription only
 from viral_captions import generate_animated_captions  # FFmpeg viral captions
 from storage import upload_video_bytes  # Direct upload to Supabase
-
-# Voice mapping (user-friendly → ElevenLabs ID)
-VOICE_MAP = {
-    "male_deep": "29vD33N1CtxCmqQRPOHJ",
-    "male_calm": "0JRpJnrcyEVIabsZ4U5I",     
-    "female_energetic": "AZnzlk1XvdvUeBnXmlld",  
-    "female_soft": "TYKLc7ViOIGE13dSZYlK"       
-}
-
-# Language prompts for script generation
-LANGUAGE_PROMPTS = {
-    "english": "Generate in English",
-    "hindi": "Generate in Hindi language using Devanagari script"
-}
+from config import VOICE_MAP, LANGUAGE_PROMPTS
 
 
 def handler(job):
-    """Generate video on RunPod GPU - Railway handles upload."""
+    """Generate video on RunPod GPU — Railway handles upload."""
+    audio_path = None
+    video_path = None
+    output_path = None
+
     try:
         print("[RUNPOD] Job received", file=sys.stderr)
 
@@ -118,6 +109,15 @@ def handler(job):
     except Exception as e:
         print(f"[RUNPOD ERROR] {e}", file=sys.stderr)
         return {"status": "error", "message": str(e)}
+
+    finally:
+        # Cleanup temp files to prevent disk space leaks
+        for f in [audio_path, video_path, output_path]:
+            if f and os.path.exists(f):
+                try:
+                    os.unlink(f)
+                except Exception:
+                    pass
 
 
 runpod.serverless.start({"handler": handler})

@@ -27,8 +27,6 @@ RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
 from script_engine import generate_script
 from tts import generate_audio
 from video_fetcher import fetch_video
-from subtitle_ass import generate_ass
-from renderer import render_video
 from uploader import upload_video
 from auth_routes import router as auth_router
 from scheduler import update_schedule, load_settings, save_settings, daily_job
@@ -224,7 +222,7 @@ def process_video_job(job_id: str, script: str, user_id: str):
             "failed_at": datetime.utcnow().isoformat()
         }
         redis_conn.delete(job_id)
-        safe_redis_set(job_id, json.dumps(job_data), ex=3600)
+        safe_redis_set(job_id, job_data, ex=3600)
 
 
 @app.post("/generate-script", response_model=ScriptResponse)
@@ -266,7 +264,7 @@ async def generate_video_job(request: VideoJobRequest):
             "created_at": datetime.utcnow().isoformat()
         }
         redis_conn.delete(job_id)
-        safe_redis_set(job_id, json.dumps(job_data), ex=3600)
+        safe_redis_set(job_id, job_data, ex=3600)
 
         # Enqueue job to RQ
         video_queue.enqueue(
@@ -357,15 +355,32 @@ async def upload_latest(user_id: str = "default"):
     raise HTTPException(status_code=400, detail="Use /job-status/{job_id} to get video_url")
 
 
-@app.on_event("startup")
-def on_startup():
-    # No APScheduler - using external cron only
-    pass
+# Startup logic handled via lifespan if needed in future
 
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    """Health check with Redis and Supabase connectivity."""
+    health = {"status": "healthy", "components": {}}
+
+    # Check Redis
+    try:
+        redis_conn.ping()
+        queue_len = video_queue.count
+        health["components"]["redis"] = {"status": "up", "queue_depth": queue_len}
+    except Exception as e:
+        health["status"] = "degraded"
+        health["components"]["redis"] = {"status": "down", "error": str(e)[:100]}
+
+    # Check Supabase
+    try:
+        supabase.table("users_settings").select("user_id").limit(1).execute()
+        health["components"]["supabase"] = {"status": "up"}
+    except Exception as e:
+        health["status"] = "degraded"
+        health["components"]["supabase"] = {"status": "down", "error": str(e)[:100]}
+
+    return health
 
 
 # Auto-post settings endpoints

@@ -5,6 +5,7 @@ import os
 import json
 import uuid
 from db import supabase
+from redis_queue import redis_conn
 
 router = APIRouter()
 
@@ -25,8 +26,6 @@ else:
 REDIRECT_URI = "https://reddit-shorts-backend-production.up.railway.app/auth/callback"
 TOKENS_DIR = "tokens"
 os.makedirs(TOKENS_DIR, exist_ok=True)
-
-STATE_FILE = "oauth_state.json"
 
 
 def get_token_path(user_id: str):
@@ -58,13 +57,16 @@ def connect(user_id: str = Query(None)):
             include_granted_scopes="true"
         )
 
-        # ✅ store state AND code_verifier (PKCE requirement) + user_id
-        with open(STATE_FILE, "w") as f:
-            json.dump({
+        # ✅ Store state in Redis (multi-user safe, 10-min TTL)
+        redis_conn.set(
+            f"oauth_state:{state}",
+            json.dumps({
                 "state": state,
                 "code_verifier": flow.code_verifier,
                 "user_id": user_id
-            }, f)
+            }),
+            ex=600  # 10 minutes
+        )
 
         # Return auth URL with user_id for frontend
         return {"auth_url": auth_url, "user_id": user_id}
@@ -84,14 +86,16 @@ def callback(code: str, state: str):
         print("[AUTH ERROR] GOOGLE_CLIENT_SECRET not configured")
         return {"error": "Server configuration error: GOOGLE_CLIENT_SECRET not set"}
 
-    if not os.path.exists(STATE_FILE):
-        print("[AUTH ERROR] State file missing")
-        return {"error": "State missing. Restart auth."}
+    # Retrieve state from Redis (multi-user safe)
+    raw_state = redis_conn.get(f"oauth_state:{state}")
+    if not raw_state:
+        print("[AUTH ERROR] State not found in Redis (expired or missing)")
+        return {"error": "State expired or missing. Restart auth."}
 
     try:
-        saved_data = json.load(open(STATE_FILE))
+        saved_data = json.loads(raw_state if isinstance(raw_state, str) else raw_state.decode("utf-8"))
     except Exception as e:
-        print(f"[AUTH ERROR] Failed to load state file: {e}")
+        print(f"[AUTH ERROR] Failed to parse state data: {e}")
         return {"error": f"Failed to load state: {str(e)}"}
         
     saved_state = saved_data.get("state")
@@ -146,7 +150,7 @@ def callback(code: str, state: str):
         }, on_conflict="user_id").execute()
         print(f"[AUTH CALLBACK] Token saved to Supabase: {result}")
 
-        os.remove(STATE_FILE)
+        redis_conn.delete(f"oauth_state:{state}")
         print(f"[AUTH CALLBACK] State file cleaned up, redirecting to dashboard")
 
         # Redirect back to frontend dashboard after auth

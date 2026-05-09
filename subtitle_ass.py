@@ -1,6 +1,7 @@
 import subprocess
 import json
 
+
 def get_audio_duration(audio_path):
     """Get audio duration using ffmpeg ffprobe."""
     cmd = [
@@ -10,6 +11,19 @@ def get_audio_duration(audio_path):
     result = subprocess.run(cmd, capture_output=True, text=True)
     data = json.loads(result.stdout)
     return float(data["format"]["duration"])
+
+
+def format_ass_time(seconds: float) -> str:
+    """Format seconds as ASS timestamp (H:MM:SS.cc).
+    
+    Properly handles durations beyond 60 seconds.
+    """
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    centis = int((s % 1) * 100)
+    return f"{h}:{m:02d}:{int(s):02d}.{centis:02d}"
+
 
 def generate_ass(script, audio_path, path):
     """Generate ASS subtitles with timing based on audio duration.
@@ -56,8 +70,8 @@ Format: Layer, Start, End, Style, Text
             start = i * time_per_line
             end = start + time_per_line
 
-            start_time = f"0:00:{int(start):02}.{int((start%1)*100):02}"
-            end_time = f"0:00:{int(end):02}.{int((end%1)*100):02}"
+            start_time = format_ass_time(start)
+            end_time = format_ass_time(end)
 
             f.write(f"Dialogue: 0,{start_time},{end_time},Default,{line}\n")
 

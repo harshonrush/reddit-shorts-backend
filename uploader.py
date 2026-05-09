@@ -4,6 +4,7 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from datetime import datetime, timedelta, timezone
 import os
+import json
 import tempfile
 import requests
 from db import supabase
@@ -45,6 +46,35 @@ def _parse_expiry(expiry_str) -> datetime:
         expiry = expiry.replace(tzinfo=timezone.utc)
     
     return expiry
+
+
+def get_google_oauth_credentials():
+    """Extract client_id and client_secret from environment.
+    
+    Handles two formats:
+    1. GOOGLE_CLIENT_SECRET as full JSON config (same as client_secret.json)
+    2. Separate GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET env vars
+    
+    Returns:
+        tuple: (client_id, client_secret)
+    """
+    raw = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    
+    # Try parsing as JSON config (the full client_secret.json format)
+    if raw.strip().startswith("{"):
+        try:
+            config = json.loads(raw)
+            # Handle {"web": {...}} or {"installed": {...}} format
+            inner = config.get("web") or config.get("installed") or {}
+            cid = inner.get("client_id", "")
+            csec = inner.get("client_secret", "")
+            if cid and csec:
+                return cid, csec
+        except json.JSONDecodeError:
+            pass
+    
+    # Fallback: separate env vars
+    return os.getenv("GOOGLE_CLIENT_ID", ""), raw
 
 
 def refresh_token_if_needed(creds: Credentials, user_id: str, old_refresh_token: str = None) -> Credentials:
@@ -147,19 +177,20 @@ def load_credentials_from_supabase(user_id: str) -> Credentials:
     expiry = _parse_expiry(token_data.get("expiry"))
     old_refresh_token = token_data.get("refresh_token")
     
+    client_id, client_secret = get_google_oauth_credentials()
+    
     creds = Credentials(
         token=token_data["access_token"],
         refresh_token=old_refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
-        client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
+        client_id=client_id,
+        client_secret=client_secret,
         scopes=["https://www.googleapis.com/auth/youtube.upload"],
         expiry=expiry
     )
     
     # Debug log
-    cid = os.getenv("GOOGLE_CLIENT_ID", "")
-    print(f"[UPLOADER DEBUG] load_credentials client_id: {cid[:20]}...")
+    print(f"[UPLOADER DEBUG] load_credentials client_id: {client_id[:20]}...")
     
     # Use unified refresh function with Redis lock and proper token preservation
     creds = refresh_token_if_needed(creds, user_id, old_refresh_token)
@@ -200,9 +231,7 @@ def upload_video(video_url: str = None, file_path: str = None, title: str = "", 
         raise ValueError("Either video_url or file_path must be provided")
     
     print("[UPLOADER] STEP 1: Loading credentials...")
-    # Debug: Log client credentials (truncated for security)
-    client_id = os.getenv("GOOGLE_CLIENT_ID", "")
-    client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    client_id, client_secret = get_google_oauth_credentials()
     print(f"[UPLOADER DEBUG] GOOGLE_CLIENT_ID: {client_id[:20]}...")
     print(f"[UPLOADER DEBUG] GOOGLE_CLIENT_SECRET set: {bool(client_secret)}")
     

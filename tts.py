@@ -135,13 +135,7 @@ def generate_audio(text: str, output_path: str, voice_id: str = None) -> str:
         print(f"[ELEVENLABS ERROR] {e}, falling back to Gemini TTS...", file=os.sys.stderr)
         
         # Fallback to Gemini TTS with mapped voice
-        # Map ElevenLabs voice to Gemini voice
-        GEMINI_VOICE_MAP = {
-            "29vD33N1CtxCmqQRPOHJ": "Kore",      # male_deep -> Kore
-            "0JRpJnrcyEVIabsZ4U5I": "Aoede",     # male_calm -> Aoede  
-            "AZnzlk1XvdvUeBnXmlld": "Puck",     # female_energetic -> Puck
-            "TYKLc7ViOIGE13dSZYlK": "Charon",   # female_soft -> Charon
-        }
+        from config import GEMINI_VOICE_MAP
         gemini_voice = GEMINI_VOICE_MAP.get(voice_id, "Kore")
         
         try:

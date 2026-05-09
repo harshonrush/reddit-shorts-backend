@@ -342,7 +342,8 @@ async def upload_to_youtube(request: UploadRequest):
         res = upload_video(
             file_path=request.video_path,
             title=request.title,
-            description=request.description
+            description=request.description,
+            user_id="default"  # Assuming manual upload uses default for now, or update UploadRequest to take user_id
         )
         return {"status": "uploaded", "youtube_id": res["id"], "url": f"https://youtube.com/watch?v={res['id']}"}
     except Exception as e:

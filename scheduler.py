@@ -273,7 +273,8 @@ def daily_job(user_id: str, token_data: dict = None, lock_key: str = None):
                     video_url=video_url,
                     title=f"{topic.title()} Story",
                     description=f"#{niche} #shorts #viral",
-                    token_data=token_data
+                    token_data=token_data,
+                    user_id=user_id
                 )
 
                 if res:

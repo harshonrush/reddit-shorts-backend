@@ -88,6 +88,10 @@ def refresh_token_if_needed(creds: Credentials, user_id: str, old_refresh_token:
     Returns:
         Updated credentials
     """
+    # Validate user_id is a proper UUID, not "default" or empty
+    if not user_id or user_id == "default":
+        raise ValueError(f"Invalid user_id: {user_id!r}. Must be a valid UUID.")
+    
     if not creds:
         return creds
     
@@ -198,7 +202,7 @@ def load_credentials_from_supabase(user_id: str) -> Credentials:
     return creds
 
 
-def upload_video(video_url: str = None, file_path: str = None, title: str = "", description: str = "", tags: list = None, user_id: str = "default", token_data: dict = None) -> dict:
+def upload_video(video_url: str = None, file_path: str = None, title: str = "", description: str = "", tags: list = None, user_id: str = None, token_data: dict = None) -> dict:
     """Upload video to YouTube using OAuth token.
     
     Args:
@@ -207,12 +211,18 @@ def upload_video(video_url: str = None, file_path: str = None, title: str = "", 
         title: Video title
         description: Video description
         tags: List of tags (optional)
-        user_id: User identifier for token lookup
+        user_id: User identifier for token lookup (REQUIRED)
         token_data: Pre-fetched token data (optional, saves DB query)
         
     Returns:
         YouTube API response with video ID
     """
+    # Validate user_id is provided and not "default"
+    if not user_id:
+        raise ValueError("user_id is required for upload_video")
+    if user_id == "default":
+        raise ValueError("user_id cannot be 'default' - must be a valid UUID")
+    
     # Download video from URL if provided
     downloaded = False
     if video_url and not file_path:

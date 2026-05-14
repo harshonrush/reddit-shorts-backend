@@ -100,6 +100,7 @@ class SeriesRequest(BaseModel):
     duration: str = "30-60"  # 15-30, 30-60, 60-90
     post_time: str = "18:30"  # HH:MM format (IST)
     frequency: str = "daily"  # daily | alternate
+    enable_images: bool = False  # NEW: Enable Gemini + Pexels images
 
 
 class SeriesResponse(BaseModel):

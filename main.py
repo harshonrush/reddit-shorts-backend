@@ -425,6 +425,7 @@ async def create_series(request: SeriesRequest):
             "language": request.language,
             "duration": request.duration,
             "frequency": request.frequency,
+            "enable_images": request.enable_images,
             "is_posting": False,
             "yt_connected": True  # Assume connected when creating series
         }

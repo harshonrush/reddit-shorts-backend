@@ -31,6 +31,7 @@ def trigger_render(topic: str, user_id: str, token_data: dict, settings: dict = 
             input_data["language"] = settings.get("language", "english")
             input_data["video_style"] = settings.get("video_style", "gameplay")
             input_data["duration"] = settings.get("duration", "30-60")
+            input_data["enable_images"] = settings.get("enable_images", False)
         
         print(f"[RUNPOD] Triggering render for user {user_id}, topic: {topic}, voice: {input_data.get('voice')}")
         res = requests.post(
@@ -136,6 +137,7 @@ def load_settings(user_id: str):
         "language": "english",  # english | hindi
         "duration": "30-60",  # 15-30 | 30-60 | 60-90
         "frequency": "daily",  # daily | alternate
+        "enable_images": False,
         "last_posted_date": None,
         "is_posting": False,
         "yt_connected": False

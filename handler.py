@@ -16,6 +16,7 @@ from image_effects import (
     resize_image_to_video,
     apply_color_effects,
     create_ken_burns_effect,
+    create_image_slideshow,
     overlay_image_on_video
 )
 from storage import upload_video_bytes  # Direct upload to Supabase
@@ -123,32 +124,68 @@ def handler(job):
                 fetched_images = fetch_images_for_scenes(scene_prompts, images_dir, fallback_niche=niche)
                 successful_images = [img for img in fetched_images if img["status"] == "success"]
                 
-                if successful_images:
+                if successful_images and len(successful_images) > 0:
                     print(f"[RUNPOD] Successfully fetched {len(successful_images)}/{len(fetched_images)} images", file=sys.stderr)
                     
                     # Step 3c: Apply effects to images
-                    print(f"[RUNPOD] Step 3c: Applying color effects...", file=sys.stderr)
+                    print(f"[RUNPOD] Step 3c: Applying color effects to {len(successful_images)} images...", file=sys.stderr)
+                    processed_images = []
                     for img_data in successful_images:
                         img_path = img_data["image_path"]
                         effects_path = img_path.replace(".jpg", "_effects.jpg")
                         
                         # Resize to video dimensions
-                        resize_image_to_video(img_path, img_path, fit="cover")
+                        if not resize_image_to_video(img_path, img_path, fit="cover"):
+                            print(f"[RUNPOD] Warning: Failed to resize {img_path}", file=sys.stderr)
+                            continue
                         
                         # Apply color effects (boost saturation for viral look)
-                        apply_color_effects(img_path, effects_path, 
-                                          brightness=1.05, 
-                                          contrast=1.15, 
-                                          saturation=1.3)
-                        img_data["image_path_effects"] = effects_path
+                        if not apply_color_effects(img_path, effects_path, 
+                                              brightness=1.05, 
+                                              contrast=1.15, 
+                                              saturation=1.3):
+                            print(f"[RUNPOD] Warning: Failed to apply effects to {img_path}", file=sys.stderr)
+                            continue
+                        
+                        processed_images.append(effects_path)
                     
-                    # Note: Image overlay will be done after captions
-                    images_applied = True
+                    if processed_images:
+                        # Step 3d: Create slideshow from processed images
+                        print(f"[RUNPOD] Step 3d: Creating slideshow from {len(processed_images)} images...", file=sys.stderr)
+                        slideshow_path = os.path.join(temp_dir, "slideshow.mp4")
+                        
+                        # Calculate duration per image based on audio length
+                        try:
+                            from subtitle_ass import get_audio_duration
+                            audio_duration = get_audio_duration(audio_path)
+                            duration_per_image = audio_duration / len(processed_images)
+                            print(f"[RUNPOD] Audio duration: {audio_duration}s, per image: {duration_per_image}s", file=sys.stderr)
+                        except:
+                            duration_per_image = 2.0  # Fallback
+                        
+                        slideshow_created = create_image_slideshow(
+                            processed_images,
+                            slideshow_path,
+                            duration_per_image=duration_per_image,
+                            transition="fade"
+                        )
+                        
+                        if slideshow_created:
+                            # Replace video_path with slideshow
+                            video_path = slideshow_path
+                            images_applied = True
+                            print(f"[RUNPOD] Slideshow created successfully: {video_path}", file=sys.stderr)
+                        else:
+                            print(f"[RUNPOD] Failed to create slideshow, using original video", file=sys.stderr)
+                    else:
+                        print(f"[RUNPOD] No images after effects processing, using original video", file=sys.stderr)
                 else:
-                    print(f"[RUNPOD] No images fetched, continuing without image overlays", file=sys.stderr)
+                    print(f"[RUNPOD] No images fetched ({len(successful_images)}/{len(fetched_images)}), continuing with default video", file=sys.stderr)
             
             except Exception as e:
-                print(f"[RUNPOD] Image generation failed: {e} - continuing with video only", file=sys.stderr)
+                print(f"[RUNPOD] Image generation failed: {e} - continuing with default video", file=sys.stderr)
+                import traceback
+                traceback.print_exc(file=sys.stderr)
         
         # 7. Step 4: Get word timestamps from Deepgram
         print(f"[RUNPOD] Step 4: Getting word timestamps...", file=sys.stderr)

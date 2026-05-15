@@ -210,29 +210,20 @@ def create_image_slideshow(
                 f.write(f"file '{os.path.abspath(img_path)}'\n")
                 f.write(f"duration {duration_per_image}\n")
         
-        # Build FFmpeg filter for transitions
-        if transition == "fade":
-            filter_complex = "xfade=transition=fade:duration=0.5"
-        elif transition == "dissolve":
-            filter_complex = "xfade=transition=dissolve:duration=0.5"
-        elif transition == "zoom":
-            filter_complex = "xfade=transition=zoom:duration=0.5"
-        else:
-            filter_complex = None
-        
         cmd = [
             "ffmpeg", "-y",
             "-f", "concat",
             "-safe", "0",
             "-i", concat_file,
             "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
             "-preset", "ultrafast",
             "-crf", "28",
             output_video_path
         ]
         
-        if filter_complex:
-            cmd.extend(["-filter_complex", filter_complex])
+        # Transitions via -filter_complex with concat demuxer will crash FFmpeg
+        # so we rely purely on straight cuts through the demuxer.
         
         result = subprocess.run(cmd, capture_output=True, text=True)
         

@@ -113,7 +113,8 @@ def generate_word_by_word_captions(
     video_path: str,
     audio_path: str,
     words: List[Dict],
-    output_path: str
+    output_path: str,
+    loop_video: bool = True
 ) -> str:
     """Generate video with word-by-word animated captions.
     
@@ -122,6 +123,7 @@ def generate_word_by_word_captions(
         audio_path: Path to input audio
         words: List of word dicts from Deepgram with timing
         output_path: Path to save output video
+        loop_video: Whether to loop the input video if it's shorter than audio
         
     Returns:
         Path to output video
@@ -156,9 +158,11 @@ def generate_word_by_word_captions(
     print(f"[CAPTION ANIMATOR] Generating FFmpeg command...", file=sys.stderr)
     
     # FFmpeg command with drawtext filter for word-by-word animation
-    cmd = [
-        "ffmpeg", "-y",
-        "-stream_loop", "-1",  # Loop video if shorter than audio
+    cmd = ["ffmpeg", "-y"]
+    if loop_video:
+        cmd.extend(["-stream_loop", "-1"])  # Loop video if shorter than audio
+        
+    cmd.extend([
         "-i", video_path,
         "-i", audio_path,
         "-map", "0:v",
@@ -170,7 +174,7 @@ def generate_word_by_word_captions(
         "-c:a", "aac",
         "-shortest",  # Stop at shortest input
         output_path
-    ]
+    ])
     
     print(f"[CAPTION ANIMATOR] Running FFmpeg...", file=sys.stderr)
     

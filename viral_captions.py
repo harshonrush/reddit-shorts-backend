@@ -56,7 +56,8 @@ def generate_viral_captions_ffmpeg(
     video_path: str,
     audio_path: str,
     words: List[Dict],
-    output_path: str
+    output_path: str,
+    loop_video: bool = True
 ):
     """Generate viral-style video with SRT subtitles.
     
@@ -99,9 +100,11 @@ def generate_viral_captions_ffmpeg(
     
     # FFmpeg with subtitles filter (-vf is cleaner than -filter_complex)
     # Font: DejaVu Sans (available on Linux), big viral style
-    cmd = [
-        "ffmpeg", "-y",
-        "-stream_loop", "-1",  # Loop video infinitely to match audio
+    cmd = ["ffmpeg", "-y"]
+    if loop_video:
+        cmd.extend(["-stream_loop", "-1"])  # Loop video infinitely to match audio
+        
+    cmd.extend([
         "-i", video_path,
         "-i", audio_path,
         "-map", "0:v",
@@ -111,7 +114,7 @@ def generate_viral_captions_ffmpeg(
         "-c:a", "aac",
         "-shortest",  # Stop when shortest input (audio) ends
         output_path
-    ]
+    ])
     
     print(f"[FFMPEG] Running with SRT subtitles...", file=sys.stderr)
     

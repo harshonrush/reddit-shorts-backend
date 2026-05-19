@@ -245,6 +245,62 @@ def create_image_slideshow(
         return None
 
 
+def create_video_slideshow(
+    video_paths: List[str],
+    output_video_path: str
+) -> str:
+    """Concatenate multiple video clips into a single video slideshow.
+    
+    Args:
+        video_paths: List of video paths (.mp4 files)
+        output_video_path: Output video path
+        
+    Returns:
+        Path to output video
+    """
+    if not video_paths:
+        print(f"[VIDEO SLIDESHOW] No videos provided", file=sys.stderr)
+        return None
+    
+    print(f"[VIDEO SLIDESHOW] Concatenating {len(video_paths)} video clips", file=sys.stderr)
+    
+    try:
+        # Create a concat demuxer file for FFmpeg
+        concat_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False).name
+        
+        with open(concat_file, 'w') as f:
+            for vid_path in video_paths:
+                f.write(f"file '{os.path.abspath(vid_path)}'\n")
+        
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concat_file,
+            "-c:v", "copy",  # Fast stream copy since codecs match
+            output_video_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        # Cleanup
+        try:
+            os.unlink(concat_file)
+        except:
+            pass
+        
+        if result.returncode != 0:
+            print(f"[VIDEO SLIDESHOW] FFmpeg error: {result.stderr[-200:]}", file=sys.stderr)
+            return None
+        
+        print(f"[VIDEO SLIDESHOW] Concatenation successful: {output_video_path}", file=sys.stderr)
+        return output_video_path
+    
+    except Exception as e:
+        print(f"[VIDEO SLIDESHOW] Creation failed: {e}", file=sys.stderr)
+        return None
+
+
 def overlay_image_on_video(
     background_video_path: str,
     image_path: str,

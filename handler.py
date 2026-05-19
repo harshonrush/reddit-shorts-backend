@@ -17,6 +17,7 @@ from image_effects import (
     apply_color_effects,
     create_ken_burns_effect,
     create_image_slideshow,
+    create_video_slideshow,
     overlay_image_on_video
 )
 from storage import upload_video_bytes  # Direct upload to Supabase
@@ -150,10 +151,6 @@ def handler(job):
                         processed_images.append(effects_path)
                     
                     if processed_images:
-                        # Step 3d: Create slideshow from processed images
-                        print(f"[RUNPOD] Step 3d: Creating slideshow from {len(processed_images)} images...", file=sys.stderr)
-                        slideshow_path = os.path.join(temp_dir, "slideshow.mp4")
-                        
                         # Calculate duration per image based on audio length
                         try:
                             from subtitle_ass import get_audio_duration
@@ -162,21 +159,37 @@ def handler(job):
                             print(f"[RUNPOD] Audio duration: {audio_duration}s, per image: {duration_per_image}s", file=sys.stderr)
                         except:
                             duration_per_image = 2.0  # Fallback
+
+                        # Step 3d: Create dynamic video clips for each image
+                        print(f"[RUNPOD] Step 3d: Creating dynamic Ken Burns clips for {len(processed_images)} images...", file=sys.stderr)
+                        video_clips = []
+                        for idx, img_path in enumerate(processed_images):
+                            clip_path = os.path.join(temp_dir, f"clip_{idx}.mp4")
+                            clip = create_ken_burns_effect(
+                                img_path, 
+                                clip_path, 
+                                duration=duration_per_image,
+                                start_zoom=1.0,
+                                end_zoom=1.1
+                            )
+                            if clip:
+                                video_clips.append(clip)
                         
-                        slideshow_created = create_image_slideshow(
-                            processed_images,
-                            slideshow_path,
-                            duration_per_image=duration_per_image,
-                            transition="fade"
-                        )
-                        
-                        if slideshow_created:
-                            # Replace video_path with slideshow
-                            video_path = slideshow_path
-                            images_applied = True
-                            print(f"[RUNPOD] Slideshow created successfully: {video_path}", file=sys.stderr)
+                        if video_clips:
+                            # Concatenate the dynamic video clips
+                            print(f"[RUNPOD] Step 3e: Concatenating {len(video_clips)} dynamic video clips...", file=sys.stderr)
+                            slideshow_path = os.path.join(temp_dir, "slideshow.mp4")
+                            slideshow_created = create_video_slideshow(video_clips, slideshow_path)
+                            
+                            if slideshow_created:
+                                # Replace video_path with slideshow
+                                video_path = slideshow_path
+                                images_applied = True
+                                print(f"[RUNPOD] Slideshow created successfully: {video_path}", file=sys.stderr)
+                            else:
+                                print(f"[RUNPOD] Failed to create slideshow, using original video", file=sys.stderr)
                         else:
-                            print(f"[RUNPOD] Failed to create slideshow, using original video", file=sys.stderr)
+                            print(f"[RUNPOD] Failed to create any video clips, using original video", file=sys.stderr)
                     else:
                         print(f"[RUNPOD] No images after effects processing, using original video", file=sys.stderr)
                 else:
@@ -197,14 +210,16 @@ def handler(job):
         # 8. Step 5: Generate captions (with style selector)
         print(f"[RUNPOD] Step 5: Generating {caption_style} captions...", file=sys.stderr)
         
+        loop_video = not images_applied
+
         if caption_style == "word-by-word" and words:
             # NEW: Word-by-word animated captions
-            print(f"[RUNPOD] Using word-by-word animated captions", file=sys.stderr)
-            generate_word_by_word_captions(video_path, audio_path, words, output_path)
+            print(f"[RUNPOD] Using word-by-word animated captions (loop_video={loop_video})", file=sys.stderr)
+            generate_word_by_word_captions(video_path, audio_path, words, output_path, loop_video=loop_video)
         else:
             # Default: Viral line-by-line captions
-            print(f"[RUNPOD] Using viral line-by-line captions", file=sys.stderr)
-            generate_animated_captions(video_path, audio_path, words, output_path)
+            print(f"[RUNPOD] Using viral line-by-line captions (loop_video={loop_video})", file=sys.stderr)
+            generate_animated_captions(video_path, audio_path, words, output_path, loop_video=loop_video)
         
         output_size = os.path.getsize(output_path)
         print(f"[RUNPOD] Captions applied: {output_size} bytes", file=sys.stderr)

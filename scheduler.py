@@ -32,6 +32,8 @@ def trigger_render(topic: str, user_id: str, token_data: dict, settings: dict = 
             input_data["video_style"] = settings.get("video_style", "gameplay")
             input_data["duration"] = settings.get("duration", "30-60")
             input_data["enable_images"] = settings.get("enable_images", False)
+            input_data["niche"] = settings.get("niche", "general")
+            input_data["caption_style"] = settings.get("caption_style", "viral")
         
         print(f"[RUNPOD] Triggering render for user {user_id}, topic: {topic}, voice: {input_data.get('voice')}")
         res = requests.post(

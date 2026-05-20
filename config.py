@@ -46,3 +46,14 @@ DEFAULT_TOPICS = [
     "workplace drama",
     "family secrets",
 ]
+
+# Background music styles mapping (style_name -> direct_mp3_url)
+MUSIC_MAP = {
+    "dark_ambient": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3",
+    "lofi": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+    "upbeat": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+    "cinematic": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
+}
+
+DEFAULT_MUSIC_VOLUME = 0.15
+

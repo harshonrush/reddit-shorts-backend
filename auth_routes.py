@@ -167,5 +167,88 @@ def callback(code: str, state: str):
 # 🔹 STEP 3: STATUS
 @router.get("/auth/status")
 def status(user_id: str = Query("default")):
-    res = supabase.table("user_tokens").select("*").eq("user_id", user_id).execute()
-    return {"connected": len(res.data) > 0, "user_id": user_id}
+    connected = False
+    yt_connected = False
+    tt_connected = False
+    ig_connected = False
+    
+    try:
+        res = supabase.table("user_tokens").select("*").eq("user_id", user_id).execute()
+        if res.data:
+            token_data = res.data[0]
+            yt_connected = bool(token_data.get("access_token"))
+            tt_connected = bool(token_data.get("tiktok_access_token"))
+            ig_connected = bool(token_data.get("instagram_access_token"))
+            connected = yt_connected or tt_connected or ig_connected
+    except Exception as e:
+        print(f"[AUTH STATUS ERROR] Failed to query user tokens: {e}")
+
+    return {
+        "connected": connected,
+        "yt_connected": yt_connected,
+        "tt_connected": tt_connected,
+        "ig_connected": ig_connected,
+        "user_id": user_id
+    }
+
+
+# 🔹 STEP 4: TIKTOK CONNECT & CALLBACK (OAuth Gateway & Simulator)
+@router.get("/auth/connect/tiktok")
+def connect_tiktok(user_id: str = Query(None)):
+    """Initiates TikTok connection workflow."""
+    if not user_id:
+        user_id = str(uuid.uuid4())
+    
+    # Standard redirect callback url back to settings dashboard page
+    FRONTEND_REDIRECT = f"http://localhost:3000/settings?user_id={user_id}&tiktok=connected"
+    
+    # In live API integration, we build standard authorization_url.
+    # To facilitate high-fidelity sandbox mock connect immediately:
+    # Save simulated TikTok access token in user_tokens database:
+    try:
+        # Ensure default rows exists
+        try:
+            from scheduler import load_settings
+            load_settings(user_id)
+        except Exception:
+            pass
+            
+        supabase.table("user_tokens").upsert({
+            "user_id": user_id,
+            "tiktok_access_token": "mock_tiktok_token_simulated_credentials",
+            "tiktok_refresh_token": "mock_tiktok_refresh_simulated",
+            "tiktok_expiry": None
+        }, on_conflict="user_id").execute()
+        print(f"[TIKTOK CONNECT] Simulated credentials linked successfully for User: {user_id}")
+    except Exception as e:
+        print(f"[TIKTOK CONNECT ERROR] Failed to link mock credentials: {e}")
+        
+    return {"auth_url": FRONTEND_REDIRECT, "user_id": user_id}
+
+
+# 🔹 STEP 5: INSTAGRAM CONNECT & CALLBACK (OAuth Gateway & Simulator)
+@router.get("/auth/connect/instagram")
+def connect_instagram(user_id: str = Query(None)):
+    """Initiates Instagram connection workflow."""
+    if not user_id:
+        user_id = str(uuid.uuid4())
+        
+    FRONTEND_REDIRECT = f"http://localhost:3000/settings?user_id={user_id}&instagram=connected"
+    
+    try:
+        try:
+            from scheduler import load_settings
+            load_settings(user_id)
+        except Exception:
+            pass
+            
+        supabase.table("user_tokens").upsert({
+            "user_id": user_id,
+            "instagram_access_token": "mock_instagram_token_simulated_credentials",
+            "instagram_expiry": None
+        }, on_conflict="user_id").execute()
+        print(f"[INSTAGRAM CONNECT] Simulated credentials linked successfully for User: {user_id}")
+    except Exception as e:
+        print(f"[INSTAGRAM CONNECT ERROR] Failed to link mock credentials: {e}")
+        
+    return {"auth_url": FRONTEND_REDIRECT, "user_id": user_id}

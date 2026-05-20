@@ -52,6 +52,9 @@ def handler(job):
         
         # NEW: Image features
         enable_images = job["input"].get("enable_images", False)
+        storyboard_scenes = job["input"].get("storyboard_scenes", None)
+        if storyboard_scenes:
+            enable_images = True
         use_user_video = job["input"].get("use_user_video", False)  # Use provided video instead of fetching
         user_video_path = job["input"].get("user_video_path", None)
         
@@ -115,14 +118,51 @@ def handler(job):
         # 6. Step 3: NEW - Generate images if enabled
         images_applied = False
         if enable_images:
-            print(f"[RUNPOD] Step 3a: Generating scene descriptions for images...", file=sys.stderr)
             try:
-                scene_prompts = generate_image_prompts(script, niche=niche)
-                print(f"[RUNPOD] Generated {len(scene_prompts)} image prompts", file=sys.stderr)
+                if storyboard_scenes:
+                    print(f"[RUNPOD] Step 3a: Processing custom storyboard scenes...", file=sys.stderr)
+                    os.makedirs(images_dir, exist_ok=True)
+                    fetched_images = []
+                    for idx, scene in enumerate(storyboard_scenes, 1):
+                        selected_url = scene.get("selected_image_url")
+                        image_prompt = scene.get("image_prompt", "")
+                        
+                        output_path = os.path.join(images_dir, f"scene_{idx:02d}.jpg")
+                        image_path = None
+                        status = "failed"
+                        
+                        if selected_url:
+                            from pexels_integration import download_image
+                            print(f"[RUNPOD] Downloading custom image for scene {idx}: {selected_url}", file=sys.stderr)
+                            success = download_image(selected_url, output_path)
+                            if success:
+                                image_path = output_path
+                                status = "success"
+                        
+                        if status == "failed":
+                            # Fallback search if URL is empty or failed
+                            from pexels_integration import fetch_best_image
+                            fallback = " ".join(image_prompt.split()[:3]) if image_prompt else niche
+                            print(f"[RUNPOD] Custom image download failed/missing for scene {idx}. Running fallback search for: {fallback}", file=sys.stderr)
+                            image_path = fetch_best_image(image_prompt, output_path, fallback_query=fallback)
+                            if image_path:
+                                status = "success"
+                                
+                        fetched_images.append({
+                            "scene_index": idx,
+                            "image_prompt": image_prompt,
+                            "image_path": image_path,
+                            "status": status
+                        })
+                else:
+                    print(f"[RUNPOD] Step 3a: Generating scene descriptions for images...", file=sys.stderr)
+                    scene_prompts = generate_image_prompts(script, niche=niche)
+                    print(f"[RUNPOD] Generated {len(scene_prompts)} image prompts", file=sys.stderr)
+                    
+                    # Fetch images from Pexels
+                    print(f"[RUNPOD] Step 3b: Fetching images from Pexels...", file=sys.stderr)
+                    fetched_images = fetch_images_for_scenes(scene_prompts, images_dir, fallback_niche=niche)
                 
-                # Fetch images from Pexels
-                print(f"[RUNPOD] Step 3b: Fetching images from Pexels...", file=sys.stderr)
-                fetched_images = fetch_images_for_scenes(scene_prompts, images_dir, fallback_niche=niche)
                 successful_images = [img for img in fetched_images if img["status"] == "success"]
                 
                 if successful_images and len(successful_images) > 0:
@@ -207,6 +247,12 @@ def handler(job):
         if not words:
             print(f"[RUNPOD WARNING] No words detected - captions will be empty", file=sys.stderr)
         
+        # Step 4b: Resolve background music
+        bg_music = job["input"].get("bg_music", "none")
+        print(f"[RUNPOD] Resolving background music style: {bg_music}...", file=sys.stderr)
+        from music_engine import fetch_background_music
+        bg_music_path = fetch_background_music(bg_music)
+
         # 8. Step 5: Generate captions (with style selector)
         print(f"[RUNPOD] Step 5: Generating {caption_style} captions...", file=sys.stderr)
         
@@ -214,12 +260,13 @@ def handler(job):
 
         if caption_style == "word-by-word" and words:
             # NEW: Word-by-word animated captions
-            print(f"[RUNPOD] Using word-by-word animated captions (loop_video={loop_video})", file=sys.stderr)
-            generate_word_by_word_captions(video_path, audio_path, words, output_path, loop_video=loop_video)
+            print(f"[RUNPOD] Using word-by-word animated captions (loop_video={loop_video}, bg_music={bg_music})", file=sys.stderr)
+            generate_word_by_word_captions(video_path, audio_path, words, output_path, loop_video=loop_video, bg_music_path=bg_music_path)
         else:
             # Default: Viral line-by-line captions
-            print(f"[RUNPOD] Using viral line-by-line captions (loop_video={loop_video})", file=sys.stderr)
-            generate_animated_captions(video_path, audio_path, words, output_path, loop_video=loop_video)
+            print(f"[RUNPOD] Using viral line-by-line captions (loop_video={loop_video}, bg_music={bg_music})", file=sys.stderr)
+            generate_animated_captions(video_path, audio_path, words, output_path, loop_video=loop_video, bg_music_path=bg_music_path)
+
         
         output_size = os.path.getsize(output_path)
         print(f"[RUNPOD] Captions applied: {output_size} bytes", file=sys.stderr)

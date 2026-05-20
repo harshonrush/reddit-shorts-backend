@@ -370,3 +370,72 @@ def upload_video(video_url: str = None, file_path: str = None, title: str = "", 
                 print(f"[UPLOADER] Failed to cleanup temp file: {e}")
     
     raise last_error if last_error else Exception("Upload failed after all retries")
+
+
+def trigger_auto_publish(video_url: str, title: str, user_id: str):
+    """Publish finished short video in parallel to connected social platforms in the background."""
+    import threading
+    
+    def worker():
+        print(f"[AUTO PUBLISH] Beginning publishing run for User: {user_id} | Title: {title}", file=sys.stderr)
+        
+        # Load user tokens
+        token_data = None
+        try:
+            res = supabase.table("user_tokens").select("*").eq("user_id", user_id).execute()
+            if res.data:
+                token_data = res.data[0]
+        except Exception as e:
+            print(f"[AUTO PUBLISH ERROR] Failed to query user tokens: {e}", file=sys.stderr)
+            return
+
+        if not token_data:
+            print(f"[AUTO PUBLISH] No active social tokens connected for User: {user_id}", file=sys.stderr)
+            return
+
+        # 1. YouTube Upload
+        if token_data.get("access_token"):
+            try:
+                print("[AUTO PUBLISH] Triggering YouTube upload...", file=sys.stderr)
+                upload_video(
+                    video_url=video_url,
+                    title=f"{title.title()} Story",
+                    description=f"{title}\n\n#shorts #reddit #viral",
+                    token_data=token_data,
+                    user_id=user_id
+                )
+            except Exception as e:
+                print(f"[AUTO PUBLISH ERROR] YouTube upload failed: {e}", file=sys.stderr)
+
+        # 2. TikTok Upload
+        if token_data.get("tiktok_access_token"):
+            try:
+                from tiktok_uploader import upload_to_tiktok
+                print("[AUTO PUBLISH] Triggering TikTok upload...", file=sys.stderr)
+                upload_to_tiktok(
+                    video_url=video_url,
+                    title=f"{title.title()} Story #shorts #viral",
+                    user_id=user_id
+                )
+            except Exception as e:
+                print(f"[AUTO PUBLISH ERROR] TikTok upload failed: {e}", file=sys.stderr)
+
+        # 3. Instagram Reels Upload
+        if token_data.get("instagram_access_token"):
+            try:
+                from instagram_uploader import upload_to_instagram
+                print("[AUTO PUBLISH] Triggering Instagram upload...", file=sys.stderr)
+                upload_to_instagram(
+                    video_url=video_url,
+                    caption=f"{title.title()} Story #reels #viral",
+                    user_id=user_id
+                )
+            except Exception as e:
+                print(f"[AUTO PUBLISH ERROR] Instagram upload failed: {e}", file=sys.stderr)
+                
+    # Spawn background thread to keep it lightweight and fast
+    thread = threading.Thread(target=worker)
+    thread.daemon = True
+    thread.start()
+    print(f"[AUTO PUBLISH] Started publishing background thread for User: {user_id}", file=sys.stderr)
+

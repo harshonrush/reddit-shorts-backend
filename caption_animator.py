@@ -114,7 +114,8 @@ def generate_word_by_word_captions(
     audio_path: str,
     words: List[Dict],
     output_path: str,
-    loop_video: bool = True
+    loop_video: bool = True,
+    bg_music_path: str = None
 ) -> str:
     """Generate video with word-by-word animated captions.
     
@@ -124,6 +125,7 @@ def generate_word_by_word_captions(
         words: List of word dicts from Deepgram with timing
         output_path: Path to save output video
         loop_video: Whether to loop the input video if it's shorter than audio
+        bg_music_path: Optional path to background music MP3
         
     Returns:
         Path to output video
@@ -136,19 +138,41 @@ def generate_word_by_word_captions(
     
     print(f"[CAPTION ANIMATOR] Video: {video_path}", file=sys.stderr)
     print(f"[CAPTION ANIMATOR] Audio: {audio_path}", file=sys.stderr)
+    if bg_music_path:
+        print(f"[CAPTION ANIMATOR] BG Music: {bg_music_path}", file=sys.stderr)
     print(f"[CAPTION ANIMATOR] Words to animate: {len(words)}", file=sys.stderr)
     
     if not words:
-        print(f"[CAPTION ANIMATOR] No words provided, copying video as-is", file=sys.stderr)
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", video_path,
-            "-i", audio_path,
+        print(f"[CAPTION ANIMATOR] No words provided, mixing audio as-is", file=sys.stderr)
+        cmd = ["ffmpeg", "-y"]
+        if loop_video:
+            cmd.extend(["-stream_loop", "-1"])
+        cmd.extend(["-i", video_path, "-i", audio_path])
+        
+        if bg_music_path and os.path.exists(bg_music_path):
+            cmd.extend(["-stream_loop", "-1", "-i", bg_music_path])
+            
+        cmd.extend([
             "-c:v", "libx264", "-preset", "fast",
+        ])
+        
+        if bg_music_path and os.path.exists(bg_music_path):
+            cmd.extend([
+                "-filter_complex", "[2:a]volume=0.15[bg];[1:a][bg]amix=inputs=2:duration=first:dropout_transition=2[out_audio]",
+                "-map", "0:v",
+                "-map", "[out_audio]"
+            ])
+        else:
+            cmd.extend([
+                "-map", "0:v",
+                "-map", "1:a"
+            ])
+            
+        cmd.extend([
             "-c:a", "aac",
             "-shortest",
             output_path
-        ]
+        ])
         subprocess.run(cmd, check=True, capture_output=True)
         return output_path
     
@@ -157,7 +181,7 @@ def generate_word_by_word_captions(
     
     print(f"[CAPTION ANIMATOR] Generating FFmpeg command...", file=sys.stderr)
     
-    # FFmpeg command with drawtext filter for word-by-word animation
+    # FFmpeg command with drawtext filter for word-by-word animation and audio mixing
     cmd = ["ffmpeg", "-y"]
     if loop_video:
         cmd.extend(["-stream_loop", "-1"])  # Loop video if shorter than audio
@@ -165,12 +189,31 @@ def generate_word_by_word_captions(
     cmd.extend([
         "-i", video_path,
         "-i", audio_path,
-        "-map", "0:v",
-        "-map", "1:a",
+    ])
+    
+    if bg_music_path and os.path.exists(bg_music_path):
+        cmd.extend(["-stream_loop", "-1", "-i", bg_music_path])
+        
+    cmd.extend([
         "-c:v", "libx264",
         "-preset", "ultrafast",  # Fast for GPU
         "-crf", "28",  # Balance quality and speed
         "-vf", filter_str,
+    ])
+    
+    if bg_music_path and os.path.exists(bg_music_path):
+        cmd.extend([
+            "-filter_complex", "[2:a]volume=0.15[bg];[1:a][bg]amix=inputs=2:duration=first:dropout_transition=2[out_audio]",
+            "-map", "0:v",
+            "-map", "[out_audio]"
+        ])
+    else:
+        cmd.extend([
+            "-map", "0:v",
+            "-map", "1:a"
+        ])
+        
+    cmd.extend([
         "-c:a", "aac",
         "-shortest",  # Stop at shortest input
         output_path
@@ -187,3 +230,4 @@ def generate_word_by_word_captions(
     
     print(f"[CAPTION ANIMATOR] Success: {output_path}", file=sys.stderr)
     return output_path
+

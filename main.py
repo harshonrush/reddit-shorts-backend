@@ -71,9 +71,55 @@ class ScriptResponse(BaseModel):
     script_id: str
 
 
-class VideoJobRequest(BaseModel):
-    script: str
+class StoryboardRequest(BaseModel):
+    topic: str | None = None
+    script: str | None = None
+    niche: str = "facts"
+    language: str = "english"
     user_id: str = "default"
+
+
+class SubscribeRequest(BaseModel):
+    plan: str
+    user_id: str = "default"
+
+
+class StoryboardScene(BaseModel):
+    scene_index: int
+    scene_text: str
+    image_prompt: str
+    selected_image_url: str | None = None
+    preview_images: list = []
+
+
+class StoryboardResponse(BaseModel):
+    script: str
+    scenes: list[StoryboardScene]
+
+
+class SearchPexelsRequest(BaseModel):
+    query: str
+    per_page: int = 5
+
+
+class RegeneratePromptRequest(BaseModel):
+    scene_text: str
+    niche: str = "general"
+
+
+class VideoJobRequest(BaseModel):
+    script: str | None = None
+    topic: str | None = None
+    user_id: str = "default"
+    niche: str = "facts"
+    voice: str = "male_deep"
+    video_style: str = "gameplay"
+    caption_style: str = "viral"
+    enable_images: bool = False
+    language: str = "english"
+    duration: str = "30-60"
+    bg_music: str = "none"
+    storyboard_scenes: list | None = None
 
 
 class VideoJobResponse(BaseModel):
@@ -101,6 +147,7 @@ class SeriesRequest(BaseModel):
     post_time: str = "18:30"  # HH:MM format (IST)
     frequency: str = "daily"  # daily | alternate
     enable_images: bool = False  # NEW: Enable Gemini + Pexels images
+    bg_music: str = "none"
 
 
 class SeriesResponse(BaseModel):
@@ -126,23 +173,62 @@ def safe_filename(text):
     return re.sub(r'[^a-zA-Z0-9_-]', '_', text)[:20]
 
 
-def process_video_job(job_id: str, script: str, user_id: str):
+def process_video_job(
+    job_id: str,
+    user_id: str,
+    script: str | None = None,
+    topic: str | None = None,
+    niche: str = "facts",
+    voice: str = "male_deep",
+    video_style: str = "gameplay",
+    caption_style: str = "viral",
+    enable_images: bool = False,
+    language: str = "english",
+    duration: str = "30-60",
+    bg_music: str = "none",
+    storyboard_scenes: list | None = None
+):
     """RQ job: Process video generation via RunPod and update status."""
     try:
         # Initialize job data
         job_data = {
             "status": "processing",
-            "script": script,
             "user_id": user_id,
             "created_at": datetime.utcnow().isoformat()
         }
+        if script:
+            job_data["script"] = script
+        if topic:
+            job_data["topic"] = topic
+
         redis_conn.delete(job_id)
         safe_redis_set(job_id, json.dumps(job_data), ex=3600)
 
         # Step 1: Trigger RunPod job (async)
         print(f"[JOB {job_id}] Triggering RunPod job...")
-        print(f"[JOB {job_id}] Sending script to RunPod: {repr(script[:100])}...")
-        payload = {"input": {"script": script}}
+        
+        # Build standard RunPod input payload mapping all fields
+        input_data = {
+            "user_id": user_id,
+            "niche": niche,
+            "voice": voice,
+            "video_style": video_style,
+            "caption_style": caption_style,
+            "enable_images": enable_images,
+            "language": language,
+            "duration": duration,
+            "bg_music": bg_music
+        }
+        if storyboard_scenes:
+            input_data["storyboard_scenes"] = storyboard_scenes
+        if script:
+            input_data["script"] = script
+            print(f"[JOB {job_id}] Sending script to RunPod: {repr(script[:100])}...")
+        if topic:
+            input_data["topic"] = topic
+            print(f"[JOB {job_id}] Sending topic to RunPod: {repr(topic[:100])}...")
+            
+        payload = {"input": input_data}
         res = requests.post(
             RUNPOD_URL,
             headers={"Authorization": f"Bearer {RUNPOD_API_KEY}"},
@@ -201,14 +287,26 @@ def process_video_job(job_id: str, script: str, user_id: str):
             # FRESH object - atomic write
             job_data = {
                 "status": "completed",
-                "script": script,
                 "user_id": user_id,
                 "video_url": video_url,
                 "completed_at": datetime.utcnow().isoformat()
             }
+            if script:
+                job_data["script"] = script
+            if topic:
+                job_data["topic"] = topic
+
             redis_conn.delete(job_id)
             safe_redis_set(job_id, job_data, ex=3600)
             print(f"[JOB {job_id}] Video ready: {video_url}")
+
+            # Auto-publish manual compile to connected platforms in parallel
+            try:
+                from uploader import trigger_auto_publish
+                post_title = topic or niche or "AI Shorts"
+                trigger_auto_publish(video_url=video_url, title=post_title, user_id=user_id)
+            except Exception as publish_err:
+                print(f"[JOB {job_id}] Warning: Auto-publish trigger failed: {publish_err}")
         else:
             raise Exception("No video_url in RunPod output")
 
@@ -217,11 +315,15 @@ def process_video_job(job_id: str, script: str, user_id: str):
         # FRESH object on error - atomic write
         job_data = {
             "status": "failed",
-            "script": script,
             "user_id": user_id,
             "error": str(e)[:200],
             "failed_at": datetime.utcnow().isoformat()
         }
+        if script:
+            job_data["script"] = script
+        if topic:
+            job_data["topic"] = topic
+
         redis_conn.delete(job_id)
         safe_redis_set(job_id, job_data, ex=3600)
 
@@ -243,6 +345,146 @@ async def generate_script_endpoint(request: ScriptRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/generate-storyboard", response_model=StoryboardResponse)
+async def generate_storyboard_endpoint(request: StoryboardRequest):
+    """Generate script (if empty), segment it, generate image prompts, and fetch Pexels image preview URLs."""
+    try:
+        # Check SaaS credit balances
+        from credits_engine import get_user_credits
+        user_credits = get_user_credits(request.user_id)
+        if user_credits.get("credits_remaining", 0) <= 0:
+            raise HTTPException(
+                status_code=403,
+                detail="Zero credits remaining. Please upgrade your subscription tier to create drafts."
+            )
+
+        from config import LANGUAGE_PROMPTS
+        from image_generator import generate_image_prompts
+        from pexels_integration import search_images
+
+        # 1. Resolve/generate script
+        script = request.script
+        if not script:
+            topic = request.topic or "success mindset"
+            lang_prompt = LANGUAGE_PROMPTS.get(request.language, LANGUAGE_PROMPTS["english"])
+            full_topic = f"{topic}. {lang_prompt}."
+            script = generate_script(full_topic)
+
+        print(f"[STORYBOARD] Generated script: {repr(script[:100])}...", file=sys.stderr)
+
+        # 2. Generate scene-specific image prompts
+        scene_prompts = generate_image_prompts(script, niche=request.niche)
+        print(f"[STORYBOARD] Generated {len(scene_prompts)} scene prompts", file=sys.stderr)
+
+        # 3. Fetch preview images for each scene
+        scenes = []
+        for idx, scene in enumerate(scene_prompts, 1):
+            prompt_text = scene.get("image_prompt", "")
+            
+            # Fetch up to 4 preview images from Pexels
+            pexels_results = search_images(prompt_text, per_page=4)
+            if not pexels_results:
+                # Fallback to first few words or niche
+                fallback = " ".join(prompt_text.split()[:3]) if prompt_text else request.niche
+                print(f"[STORYBOARD] Scene {idx} empty results, trying fallback: '{fallback}'", file=sys.stderr)
+                pexels_results = search_images(fallback, per_page=4)
+
+            preview_images = []
+            for img in pexels_results:
+                preview_images.append({
+                    "url": img["url"],
+                    "photographer": img["photographer"],
+                    "photographer_url": img.get("photographer_url", "")
+                })
+
+            selected_url = preview_images[0]["url"] if preview_images else ""
+
+            scenes.append({
+                "scene_index": idx,
+                "scene_text": scene.get("scene_text", ""),
+                "image_prompt": prompt_text,
+                "selected_image_url": selected_url,
+                "preview_images": preview_images
+            })
+
+        return StoryboardResponse(script=script, scenes=scenes)
+    except Exception as e:
+        print(f"[STORYBOARD ERROR] {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/search-pexels")
+async def search_pexels_endpoint(request: SearchPexelsRequest):
+    """Exposes real-time Pexels image searches for interactive scene image swaps."""
+    try:
+        from pexels_integration import search_images
+        results = search_images(request.query, per_page=request.per_page)
+        return {
+            "images": [
+                {
+                    "url": img["url"],
+                    "photographer": img["photographer"],
+                    "photographer_url": img.get("photographer_url", "")
+                } for img in results
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/regenerate-scene-prompt")
+async def regenerate_scene_prompt_endpoint(request: RegeneratePromptRequest):
+    """Re-generate scene image prompt using Gemini and query fresh Pexels previews."""
+    try:
+        import google.generativeai as genai
+        from pexels_integration import search_images
+        
+        model_prompt = genai.GenerativeModel("gemini-2.5-flash")
+        system_prompt = f"""You are an expert at creating detailed, cinematic image prompts for short-form videos.
+        
+Given a scene from a {request.niche} video, generate a vivid image prompt that:
+1. Is highly visual and cinematic
+2. Works well for AI image generation
+3. Captures the mood and emotion of the scene
+4. Suggests specific visual style (cinematic, dramatic, etc.)
+5. Is concise (under 100 words)
+
+Format your response as just the image prompt, no other text."""
+        
+        response = model_prompt.generate_content(
+            f"{system_prompt}\n\nScene: {request.scene_text}",
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.85,
+                max_output_tokens=150
+            )
+        )
+        prompt_text = response.text.strip()
+        print(f"[REGEN PROMPT] Brand new prompt generated: '{prompt_text}'", file=sys.stderr)
+
+        pexels_results = search_images(prompt_text, per_page=4)
+        if not pexels_results:
+            fallback = " ".join(prompt_text.split()[:3])
+            pexels_results = search_images(fallback, per_page=4)
+
+        preview_images = [
+            {
+                "url": img["url"],
+                "photographer": img["photographer"],
+                "photographer_url": img.get("photographer_url", "")
+            } for img in pexels_results
+        ]
+
+        return {
+            "image_prompt": prompt_text,
+            "preview_images": preview_images,
+            "selected_image_url": preview_images[0]["url"] if preview_images else ""
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/generate-video", response_model=VideoJobResponse)
 async def generate_video_job(request: VideoJobRequest):
     """Step 2: Queue video generation (expensive, async, RunPod GPU)."""
@@ -252,6 +494,17 @@ async def generate_video_job(request: VideoJobRequest):
         raise HTTPException(status_code=429, detail="Rate limit: Wait 60 seconds before next video")
     safe_redis_set(cooldown_key, 1, ex=60)
 
+    # SaaS credit deduction
+    from credits_engine import deduct_user_credits
+    if not deduct_user_credits(request.user_id, amount=1):
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient credits. Please upgrade your subscription tier to render videos."
+        )
+
+    if not request.script and not request.topic:
+        raise HTTPException(status_code=400, detail="Must provide either 'script' or 'topic'")
+
     try:
         # Create truly unique job ID (no colons for URL safety)
         timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
@@ -260,19 +513,33 @@ async def generate_video_job(request: VideoJobRequest):
         # Store job status (atomic: delete first, then set)
         job_data = {
             "status": "queued",
-            "script": request.script,
             "user_id": request.user_id,
             "created_at": datetime.utcnow().isoformat()
         }
+        if request.script:
+            job_data["script"] = request.script
+        if request.topic:
+            job_data["topic"] = request.topic
+            
         redis_conn.delete(job_id)
         safe_redis_set(job_id, job_data, ex=3600)
 
         # Enqueue job to RQ
         video_queue.enqueue(
             process_video_job,
-            job_id,
-            request.script,
-            request.user_id,
+            job_id=job_id,
+            user_id=request.user_id,
+            script=request.script,
+            topic=request.topic,
+            niche=request.niche,
+            voice=request.voice,
+            video_style=request.video_style,
+            caption_style=request.caption_style,
+            enable_images=request.enable_images,
+            language=request.language,
+            duration=request.duration,
+            bg_music=request.bg_music,
+            storyboard_scenes=request.storyboard_scenes,
             retry=Retry(max=3, interval=[10, 30, 60]),
             job_timeout=600
         )
@@ -426,6 +693,7 @@ async def create_series(request: SeriesRequest):
             "duration": request.duration,
             "frequency": request.frequency,
             "enable_images": request.enable_images,
+            "bg_music": request.bg_music,
             "is_posting": False,
             "yt_connected": True  # Assume connected when creating series
         }
@@ -667,6 +935,52 @@ def run_cron(secret: str):
             supabase.table("users_settings").update({"is_posting": False}).eq("user_id", user_id).execute()
     
     return {"status": "checked", "triggered": triggered, "time": now.isoformat()}
+
+
+# ==================== NEW: Monetization & Billing Endpoints ====================
+
+@app.get("/billing/credits")
+async def get_credits(user_id: str = "default"):
+    """Get the current credit balance and tier for a user."""
+    from credits_engine import get_user_credits
+    try:
+        balance_info = get_user_credits(user_id)
+        return balance_info
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/billing/subscribe")
+async def subscribe_plan(request: SubscribeRequest):
+    """Simulates a checkout and subscribes user to a specific tier."""
+    from credits_engine import TIER_CREDITS, get_user_credits
+    from redis_queue import redis_conn
+    from db import supabase
+    import json
+    
+    plan = request.plan.lower()
+    
+    if plan not in TIER_CREDITS:
+        raise HTTPException(status_code=400, detail=f"Invalid plan. Must be one of: {list(TIER_CREDITS.keys())}")
+        
+    try:
+        balance_info = get_user_credits(request.user_id)
+        balance_info["credits_remaining"] = TIER_CREDITS[plan]
+        balance_info["tier"] = plan
+        
+        # Save to Supabase
+        try:
+            supabase.table("user_credits").upsert(balance_info).execute()
+        except Exception as e:
+            import sys
+            print(f"[BILLING ERROR] Supabase update failed: {e}", file=sys.stderr)
+            
+        # Save to Redis
+        redis_key = f"credits:{request.user_id}"
+        redis_conn.set(redis_key, json.dumps(balance_info), ex=604800)
+        
+        return {"status": "success", "message": f"Successfully subscribed to {plan} tier", "credits": balance_info}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

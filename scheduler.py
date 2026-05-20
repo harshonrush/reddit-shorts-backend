@@ -34,6 +34,7 @@ def trigger_render(topic: str, user_id: str, token_data: dict, settings: dict = 
             input_data["enable_images"] = settings.get("enable_images", False)
             input_data["niche"] = settings.get("niche", "general")
             input_data["caption_style"] = settings.get("caption_style", "viral")
+            input_data["bg_music"] = settings.get("bg_music", "none")
         
         print(f"[RUNPOD] Triggering render for user {user_id}, topic: {topic}, voice: {input_data.get('voice')}")
         res = requests.post(
@@ -140,6 +141,7 @@ def load_settings(user_id: str):
         "duration": "30-60",  # 15-30 | 30-60 | 60-90
         "frequency": "daily",  # daily | alternate
         "enable_images": False,
+        "bg_music": "none",
         "last_posted_date": None,
         "is_posting": False,
         "yt_connected": False
@@ -271,26 +273,20 @@ def daily_job(user_id: str, token_data: dict = None, lock_key: str = None):
                 video_url = poll_result.get("video_url")
                 print(f"[RUNPOD] Video ready at {video_url}")
 
-                # Upload to YouTube using user's token
-                from uploader import upload_video
-                res = upload_video(
+                # Parallel upload to all connected platforms (YouTube, TikTok, Instagram)
+                from uploader import trigger_auto_publish
+                trigger_auto_publish(
                     video_url=video_url,
                     title=f"{topic.title()} Story",
-                    description=f"#{niche} #shorts #viral",
-                    token_data=token_data,
                     user_id=user_id
                 )
-
-                if res:
-                    print(f"[UPLOAD] Video uploaded: https://youtube.com/watch?v={res['id']}")
-                    save_settings(user_id, {
-                        "is_posting": False,
-                        "last_posted_date": datetime.utcnow().strftime("%Y-%m-%d"),
-                        "last_error": None
-                    })
-                else:
-                    print(f"[UPLOAD] Failed for {user_id}")
-                    save_settings(user_id, {"is_posting": False, "last_error": "Upload failed"})
+                
+                print(f"[UPLOAD] Parallel social publishing dispatched for {user_id}")
+                save_settings(user_id, {
+                    "is_posting": False,
+                    "last_posted_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                    "last_error": None
+                })
             else:
                 print(f"[RUNPOD] Job failed for {user_id}: {poll_result.get('error')}")
                 save_settings(user_id, {
